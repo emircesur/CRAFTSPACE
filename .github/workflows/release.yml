@@ -274,3 +274,12 @@ jobs:
           tag_name: ${{ inputs.tag || github.ref_name }}
           target_commitish: ${{ github.sha }}
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+
+  # winget: manifests, a real winget install, and the winget-pkgs pull request (see winget.yml).
+  winget:
+    needs: publish
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    uses: ./.github/workflows/winget.yml
+    with:
+      tag: ${{ inputs.tag || github.ref_name }}
+    secrets: inherit

@@ -1,0 +1,117 @@
+# Publishes CraftSpace to winget (`winget install emircesur.CraftSpace`, `winget upgrade`): writes
+# the manifests for a release, checks them with winget itself, and opens the pull request on
+# microsoft/winget-pkgs. Runs after each release; run it by hand to (re)submit one.
+#
+# Submitting needs a WINGET_TOKEN secret: a classic token with the `public_repo` scope from the
+# account the pull requests come from. Without it the manifests are built, tested and kept as an
+# artifact, and nothing is submitted.
+name: winget
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      submit:
+        type: boolean
+        default: true
+    secrets:
+      WINGET_TOKEN:
+        required: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release to submit (e.g. v0.1.3)
+        required: true
+      submit:
+        description: Open the winget-pkgs pull request (off = only build and test the manifests)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  manifests:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.make.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write the manifests
+        id: make
+        run: |
+          tag="${{ inputs.tag }}"
+          version="${tag#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          curl -fsSL "https://github.com/${{ github.repository }}/releases/download/$tag/SHA256SUMS.txt" -o sums.txt
+          python3 packaging/winget/manifests.py --version "$version" --tag "$tag" --repo "${{ github.repository }}" --sums sums.txt --out winget
+      - name: Check them against winget's schemas
+        run: |
+          pip install --quiet pyyaml jsonschema
+          python3 packaging/winget/validate.py winget
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winget-manifests
+          path: winget/
+
+  # Install, find and uninstall CraftSpace with winget itself, from the manifests.
+  test:
+    needs: manifests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: winget-manifests
+          path: winget
+      - name: Get winget
+        shell: pwsh
+        run: |
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+            Install-PackageProvider -Name NuGet -Force | Out-Null
+            Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery | Out-Null
+            Repair-WinGetPackageManager -AllUsers -Latest -Force
+          }
+          winget --version
+      - name: winget validate, install, list, uninstall
+        shell: pwsh
+        run: |
+          winget validate --manifest winget
+          if ($LASTEXITCODE) { throw "winget validate failed" }
+          winget settings --enable LocalManifestFiles
+          winget install --manifest winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+          if ($LASTEXITCODE) { throw "winget install failed ($LASTEXITCODE)" }
+          $cli = "$env:LOCALAPPDATA\CraftSpace\app\bin\craftspace-cli.exe"
+          if (-not (Test-Path $cli)) { throw "CraftSpace isn't where the setup puts it" }
+          & $cli --version
+          # What winget matches an installed CraftSpace by: the setup's uninstall entry.
+          $entry = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{8C2F6E6A-5B1D-4C51-9F0B-6D3B2A9E7C41}_is1'
+          $entry | Select-Object DisplayName, DisplayVersion, Publisher | Format-List
+          if ($entry.DisplayName -ne 'CraftSpace' -or $entry.Publisher -ne 'CraftSpace contributors') { throw "the uninstall entry doesn't match the manifest" }
+          if ($entry.DisplayVersion -ne '${{ needs.manifests.outputs.version }}') { throw "the uninstall entry has version $($entry.DisplayVersion)" }
+          winget list --name CraftSpace --disable-interactivity
+          Start-Process "$env:LOCALAPPDATA\CraftSpace\app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
+          for ($i = 0; $i -lt 30 -and (Test-Path $cli); $i++) { Start-Sleep 1 }
+          if (Test-Path $cli) { throw "the uninstaller left CraftSpace behind" }
+
+  submit:
+    needs: [manifests, test]
+    runs-on: ubuntu-latest
+    # Pre-releases stay off winget.
+    if: ${{ inputs.submit && !contains(inputs.tag, '-') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: winget-manifests
+          path: winget
+      - name: Open the pull request on microsoft/winget-pkgs
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::No WINGET_TOKEN secret, so nothing was submitted. The manifests are in the winget-manifests artifact."
+            exit 0
+          fi
+          bash packaging/winget/submit.sh "${{ needs.manifests.outputs.version }}" winget

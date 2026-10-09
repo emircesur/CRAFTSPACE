@@ -72,10 +72,19 @@ app-list export/import (see [below](#managing-many-computers)).
 
 ## Install CraftSpace
 
-**Windows:** download `craftspace-<version>-windows-x64-portable.zip` (or `-arm64`) from
-[Releases](https://github.com/emircesur/craftspace/releases), unzip it and run
-`craftspace.exe`. It offers to install itself: it copies itself to `%LOCALAPPDATA%\CraftSpace`,
-adds a Start menu entry and appears in Settings › Apps. After that it updates itself.
+**Windows:** with [winget](https://learn.microsoft.com/windows/package-manager/) (once the
+package is accepted into winget's catalog):
+
+```powershell
+winget install emircesur.CraftSpace
+winget upgrade emircesur.CraftSpace    # or `winget upgrade --all`
+```
+
+Or download `craftspace-<version>-windows-x64-setup.exe` (or `-arm64`) from
+[Releases](https://github.com/emircesur/craftspace/releases) and run it: it installs for you
+only, without administrator rights. For a copy that runs from any folder, take the
+`-portable.zip` instead; it offers to install itself the first time. Installed either way (or
+through winget), CraftSpace updates itself, and winget sees the new version too.
 
 **macOS:** download `craftspace-<version>-macos-universal.dmg`, open it and drag CraftSpace to
 Applications. Until the releases are notarized (the release workflow does it once the Apple
@@ -279,6 +288,18 @@ push.
 Getting into Fedora's own repositories goes through Fedora's package review: a packager
 account and sponsor, and following the Rust packaging guidelines (each crate dependency packaged
 as `rust-*`, no vendoring). The spec is a starting point for that.
+
+### winget
+
+Each release runs [`winget.yml`](.github/workflows/winget.yml): it writes the manifests
+(`packaging/winget/manifests.py`), checks them against winget's schemas, installs, finds and
+uninstalls CraftSpace with winget on Windows, and opens the pull request on
+[microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs). Opening the pull request
+needs a `WINGET_TOKEN` repository secret: a classic token with the `public_repo` scope. Without
+it, the manifests are only built, tested and kept as the run's `winget-manifests` artifact. To
+submit an existing release, run the workflow by hand with its tag.
+
+The ArtCraft apps themselves aren't in winget; CraftSpace updates them (`craftspace-cli update`).
 
 ### Adding an app
 
