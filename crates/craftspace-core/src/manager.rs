@@ -1596,7 +1596,7 @@ pub fn find_executable(dir: &Path, binary: &str, os: Os) -> Option<PathBuf> {
 }
 
 /// Where a system installer put the app: its Settings › Apps entry, or the usual folders.
-fn find_system_install(app: &AppEntry) -> Option<PathBuf> {
+pub(crate) fn find_system_install(app: &AppEntry) -> Option<PathBuf> {
     #[cfg(windows)]
     if let Some(exe) = integrate::windows::find_uninstall_entry(&app.name).and_then(|e| e.executable(app.binary())) {
         return Some(exe);

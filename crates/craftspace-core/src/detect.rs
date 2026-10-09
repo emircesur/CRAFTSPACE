@@ -219,7 +219,9 @@ mod win {
     pub fn find(app: &AppEntry, mine: &dyn Fn(&Path) -> bool) -> Option<Found> {
         // Installed with its own installer: its Settings › Apps entry.
         if let Some(entry) = w::find_uninstall_entry(&app.name) {
-            if let Some(exe) = entry.executable(app.binary()).filter(|e| !mine(e)) {
+            // MSI entries often don't say where the program is; look where installers put it.
+            let exe = entry.executable(app.binary()).or_else(|| crate::manager::find_system_install(app));
+            if let Some(exe) = exe.filter(|e| !mine(e)) {
                 let msi = entry.key.starts_with('{') && entry.key.ends_with('}');
                 return Some(Found {
                     app_id: app.id.clone(),
