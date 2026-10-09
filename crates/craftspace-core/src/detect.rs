@@ -162,6 +162,20 @@ fn find_portable(
     None
 }
 
+/// The app in `flatpak list --app --columns=application,version,name` output: its Flatpak ID
+/// and version. Matched by an ID ending in the app's ID (`ai.storyteller.cadcraft`) or by name.
+#[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
+fn flatpak_match(list: &str, app: &AppEntry) -> Option<(String, Option<Version>)> {
+    list.lines().find_map(|line| {
+        let cols: Vec<&str> = line.split('\t').map(str::trim).collect();
+        let fid = *cols.first().filter(|f| !f.is_empty())?;
+        let version = cols.get(1).copied().unwrap_or("");
+        let name = cols.get(2).copied().unwrap_or("");
+        let id_matches = fid.to_ascii_lowercase().rsplit('.').next() == Some(app.id.as_str());
+        (id_matches || name.eq_ignore_ascii_case(&app.name)).then(|| (fid.to_string(), version_in(version)))
+    })
+}
+
 #[cfg(target_os = "macos")]
 mod mac {
     use super::*;
@@ -301,25 +315,16 @@ mod linux {
         if let Some(list) =
             output(Command::new("flatpak").args(["list", "--app", "--columns=application,version,name"]))
         {
-            for line in list.lines() {
-                let cols: Vec<&str> = line.split('\t').collect();
-                let (fid, version, name) = (
-                    cols.first().copied().unwrap_or(""),
-                    cols.get(1).copied().unwrap_or(""),
-                    cols.get(2).copied().unwrap_or(""),
-                );
-                let id_matches = fid.to_ascii_lowercase().rsplit('.').next() == Some(app.id.as_str());
-                if id_matches || name.eq_ignore_ascii_case(&app.name) {
-                    return Some(Found {
-                        app_id: app.id.clone(),
-                        version: version_in(version),
-                        kind: AssetKind::TarGz,
-                        executable: PathBuf::from(format!("flatpak:{fid}")),
-                        dir: None,
-                        system_package: None,
-                        external: External { how: "from Flatpak".into(), home: None, flatpak: Some(fid.to_string()) },
-                    });
-                }
+            if let Some((fid, version)) = super::flatpak_match(&list, app) {
+                return Some(Found {
+                    app_id: app.id.clone(),
+                    version,
+                    kind: AssetKind::TarGz,
+                    executable: PathBuf::from(format!("flatpak:{fid}")),
+                    dir: None,
+                    system_package: None,
+                    external: External { how: "from Flatpak".into(), home: None, flatpak: Some(fid) },
+                });
             }
         }
         let home = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf())?;
@@ -366,6 +371,18 @@ mod linux {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flatpak_list_is_matched() {
+        let catalog = Catalog::builtin();
+        let list = "org.gimp.GIMP\t2.10.38\tGNU Image Manipulation Program\nai.storyteller.cadcraft\t0.3.0\tCADCraft\n";
+        let cad = catalog.app("cadcraft").unwrap();
+        assert_eq!(flatpak_match(list, cad), Some(("ai.storyteller.cadcraft".into(), Some(Version::new(0, 3, 0)))));
+        // By name, without a version.
+        let pc = catalog.app("photocraft").unwrap();
+        assert_eq!(flatpak_match("org.example.Photo\t\tPhotoCraft\n", pc), Some(("org.example.Photo".into(), None)));
+        assert_eq!(flatpak_match(list, pc), None);
+    }
 
     #[test]
     fn versions_in_names() {

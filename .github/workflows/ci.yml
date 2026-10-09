@@ -53,6 +53,20 @@ jobs:
         shell: pwsh
         run: ci/e2e-windows.ps1
 
+  # Apps installed without CraftSpace on Linux: a .deb from apt and a Flatpak.
+  found-apps:
+    name: Found apps (Linux deb, Flatpak)
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p craftspace-cli
+      - run: sudo apt-get update && sudo apt-get install -y flatpak
+      - run: ci/e2e-found-linux.sh
+
   # Fedora: build the RPM the way Copr does (make srpm, then an offline rpmbuild), install it
   # with dnf, and let it install ArtCraft apps as RPMs.
   fedora:

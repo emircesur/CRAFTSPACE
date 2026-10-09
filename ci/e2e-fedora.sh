@@ -23,6 +23,21 @@ rpm -q photocraft | grep -q "0.3.0"
 $cli uninstall photocraft --yes
 ! rpm -q photocraft
 
+# Installed without CraftSpace (dnf install of the release's RPM): found, and kept up to date
+# through dnf.
+dnf -y install https://github.com/storytold/photocraft/releases/download/v0.3.0/photocraft-0.3.0-linux-x86_64.rpm
+export CRAFTSPACE_HOME=/tmp/cs-found
+$cli detect | tee /tmp/found.txt
+grep -q "Found PhotoCraft 0.3.0" /tmp/found.txt
+test "$(python3 -c "import json; print(json.load(open('$CRAFTSPACE_HOME/installed.json'))['apps']['photocraft']['current']['kind'])")" = rpm
+$cli verify photocraft
+$cli update photocraft
+rpm -q photocraft
+! rpm -q photocraft | grep -q "0.3.0"
+$cli uninstall photocraft --yes
+! rpm -q photocraft
+export CRAFTSPACE_HOME=/tmp/cs
+
 # Switching an app from the RPM to CraftSpace's own copy removes the RPM.
 $cli install gridcraft
 rpm -q gridcraft
