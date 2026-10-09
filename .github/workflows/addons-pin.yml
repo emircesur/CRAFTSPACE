@@ -1,0 +1,22 @@
+# Prints the SHA-256 and contents of add-on downloads, for pinning them in catalog.json.
+name: Pin add-ons
+
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: Download addresses, separated by spaces
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  pin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checksums and contents
+        env:
+          URLS: ${{ inputs.urls }}
+        run: python3 addons/pin.py $URLS
