@@ -1,7 +1,7 @@
 //! The Discover tab: a featured app, what's new across all apps, apps to try, and links.
 
 use craftspace_core::AppState;
-use eframe::egui::{self, Align, Color32, CornerRadius, Frame, Layout, Margin, RichText, Sense, Ui, Vec2};
+use eframe::egui::{self, Align, Color32, CornerRadius, Layout, Margin, RichText, Sense, Ui, Vec2};
 
 use crate::app::{Action, CraftSpaceApp};
 use crate::theme;
@@ -305,23 +305,43 @@ fn links(app: &mut CraftSpaceApp, ui: &mut Ui) {
     ui.label(RichText::new("Learn and connect").size(18.0).strong());
     ui.add_space(6.0);
     let catalog = app.manager.catalog();
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = Vec2::new(12.0, 12.0);
-        for link in &catalog.links {
-            let resp = Frame::new()
-                .fill(p.card)
-                .stroke(egui::Stroke::new(1.0, p.stroke))
-                .corner_radius(CornerRadius::same(10))
-                .inner_margin(Margin::symmetric(16, 12))
-                .show(ui, |ui| {
-                    ui.label(RichText::new(format!("{}  ↗", link.title)).strong());
-                    ui.label(RichText::new(link.url.trim_start_matches("https://")).size(12.0).color(p.weak));
-                });
-            if resp.response.interact(Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
-                app.actions.push(Action::OpenUrl(link.url.clone()));
+    // Fixed-size cards in rows, so long titles never squeeze into a narrow column.
+    let card = Vec2::new(250.0, 64.0);
+    let gap = 12.0;
+    let per_row = (((ui.available_width() + gap) / (card.x + gap)).floor() as usize).max(1);
+    for row in catalog.links.chunks(per_row) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for link in row {
+                let (rect, resp) = ui.allocate_exact_size(card, Sense::click());
+                let hovered = resp.hovered();
+                ui.painter().rect(
+                    rect,
+                    CornerRadius::same(10),
+                    if hovered { p.card_hover } else { p.card },
+                    egui::Stroke::new(1.0, p.stroke),
+                    egui::StrokeKind::Inside,
+                );
+                let mut inner = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(rect.shrink2(Vec2::new(16.0, 12.0)))
+                        .layout(egui::Layout::top_down(egui::Align::Min)),
+                );
+                inner.add(
+                    egui::Label::new(RichText::new(format!("{}  ↗", link.title)).strong()).truncate().selectable(false),
+                );
+                inner.add(
+                    egui::Label::new(RichText::new(link.url.trim_start_matches("https://")).size(12.0).color(p.weak))
+                        .truncate()
+                        .selectable(false),
+                );
+                if resp.on_hover_text(&link.url).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                    app.actions.push(Action::OpenUrl(link.url.clone()));
+                }
             }
-        }
-    });
+        });
+        ui.add_space(gap);
+    }
 }
 
 #[cfg(test)]

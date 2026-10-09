@@ -909,7 +909,12 @@ impl CraftSpaceApp {
                     }
                     Err(err) => self.toast(ToastKind::Error, format!("{err:#}")),
                 },
-                Action::OpenUrl(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
+                // Straight to the system's browser, so a failure can be reported.
+                Action::OpenUrl(url) => {
+                    if let Err(err) = open::that_detached(&url) {
+                        self.toast(ToastKind::Error, format!("Couldn't open {url}: {err}"));
+                    }
+                }
                 Action::OpenPath(path) => {
                     if let Err(err) = open::that_detached(&path) {
                         self.toast(ToastKind::Error, format!("Couldn't open {}: {err}", path.display()));
@@ -1155,22 +1160,13 @@ impl CraftSpaceApp {
             egui::Image::new(&theme::logo(ui.ctx())).paint_at(ui, rect);
             let name =
                 ui.add(egui::Label::new(RichText::new("CraftSpace").size(17.0).strong()).sense(egui::Sense::click()));
-            if (logo | name).on_hover_text("About CraftSpace").on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
-            {
-                self.actions.push(Action::OpenAbout);
+            if (logo | name).on_hover_text("All apps").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                self.search.clear();
+                self.actions.push(Action::GoApps(AppsView::All));
             }
             ui.add_space(18.0);
             for (tab, label) in [(Tab::Apps, "Apps"), (Tab::Files, "Files"), (Tab::Discover, "Discover")] {
-                let selected = self.tab == tab;
-                let text = RichText::new(label).size(15.0).color(if selected { p.text } else { p.weak });
-                let r = ui.add(egui::Button::new(text).frame(false));
-                if selected {
-                    let y = r.rect.bottom() + 6.0;
-                    ui.painter().line_segment(
-                        [egui::pos2(r.rect.left() + 8.0, y), egui::pos2(r.rect.right() - 8.0, y)],
-                        Stroke::new(2.5, p.text),
-                    );
-                }
+                let r = theme::tab(ui, &p, label, self.tab == tab);
                 if r.clicked() {
                     self.tab = tab;
                     if tab == Tab::Files {
@@ -1181,19 +1177,27 @@ impl CraftSpaceApp {
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.add_space(6.0);
-                if ui
-                    .add(egui::Button::new(RichText::new("⚙").size(18.0)).frame(false))
-                    .on_hover_text("Settings")
-                    .clicked()
-                {
-                    self.actions.push(Action::OpenSettings);
-                }
-                let refresh =
-                    ui.add_enabled(!self.refreshing, egui::Button::new(RichText::new("⟳").size(18.0)).frame(false));
+                // The menu: settings, about, update check.
+                let menu = theme::icon_button(ui, &p, theme::Icon::Glyph("⚙"), 30.0).on_hover_text("Menu");
+                egui::Popup::menu(&menu).show(|ui| {
+                    ui.set_min_width(190.0);
+                    if ui.button("Settings…").clicked() {
+                        self.actions.push(Action::OpenSettings);
+                    }
+                    if ui.add_enabled(!self.refreshing, egui::Button::new("Check for updates")).clicked() {
+                        self.actions.push(Action::Refresh);
+                    }
+                    ui.separator();
+                    if ui.button("About CraftSpace").clicked() {
+                        self.actions.push(Action::OpenAbout);
+                    }
+                });
                 if self.refreshing {
                     ui.add(egui::Spinner::new().size(14.0));
-                }
-                if refresh.on_hover_text("Check for updates").clicked() {
+                } else if theme::icon_button(ui, &p, theme::Icon::Glyph("⟳"), 30.0)
+                    .on_hover_text("Check for updates")
+                    .clicked()
+                {
                     self.actions.push(Action::Refresh);
                 }
                 let updates = self.update_count();

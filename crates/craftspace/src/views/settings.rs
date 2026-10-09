@@ -187,9 +187,6 @@ pub fn window(app: &mut CraftSpaceApp, ctx: &egui::Context) {
                 if ui.button("Source code ↗").clicked() {
                     app.actions.push(Action::OpenUrl("https://github.com/emircesur/craftspace".into()));
                 }
-                if ui.button("About CraftSpace…").clicked() {
-                    app.actions.push(Action::OpenAbout);
-                }
             });
         });
         ui.add_space(12.0);

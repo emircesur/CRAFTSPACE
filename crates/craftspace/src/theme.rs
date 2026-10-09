@@ -252,6 +252,8 @@ pub fn section_label(ui: &mut Ui, p: &Palette, text: &str) {
 pub enum Icon {
     Bell,
     More,
+    /// A text glyph from the default fonts (⚙, ⟳).
+    Glyph(&'static str),
 }
 
 /// A small painted icon button (glyphs for these aren't in egui's default fonts).
@@ -269,6 +271,9 @@ pub fn icon_button(ui: &mut Ui, p: &Palette, icon: Icon, size: f32) -> Response 
                 for dx in [-5.0, 0.0, 5.0] {
                     painter.circle_filled(c + Vec2::new(dx, 0.0), 1.8, color);
                 }
+            }
+            Icon::Glyph(g) => {
+                painter.text(c, egui::Align2::CENTER_CENTER, g, egui::FontId::proportional(size * 0.6), color);
             }
             Icon::Bell => {
                 let s = size / 30.0;
@@ -289,6 +294,29 @@ pub fn icon_button(ui: &mut Ui, p: &Palette, icon: Icon, size: f32) -> Response 
                 painter.circle_filled(pt(0.0, 7.5), 2.0 * s, color);
                 painter.circle_filled(pt(0.0, -9.0), 1.2 * s, color);
             }
+        }
+    }
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// A top-bar tab: weak text that brightens on hover, underlined when selected.
+pub fn tab(ui: &mut Ui, p: &Palette, label: &str, selected: bool) -> Response {
+    let galley = ui.painter().layout_no_wrap(label.to_string(), egui::FontId::proportional(15.0), p.text);
+    let size = galley.size() + Vec2::new(16.0, 10.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        if response.hovered() && !selected {
+            painter.rect_filled(rect, CornerRadius::same(6), p.card);
+        }
+        let color = if selected || response.hovered() { p.text } else { p.weak };
+        painter.galley_with_override_text_color(rect.center() - galley.size() / 2.0, galley, color);
+        if selected {
+            let y = rect.bottom() + 4.0;
+            painter.line_segment(
+                [egui::pos2(rect.left() + 8.0, y), egui::pos2(rect.right() - 8.0, y)],
+                Stroke::new(2.5, p.text),
+            );
         }
     }
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
