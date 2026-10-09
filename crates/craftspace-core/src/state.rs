@@ -22,6 +22,9 @@ pub struct InstalledDb {
     /// Files written by add-on packs, by add-on id.
     #[serde(default)]
     pub packs: BTreeMap<String, Vec<PathBuf>>,
+    /// Workspace profiles from the policy that were applied: app id → the profile's SHA-256.
+    #[serde(default)]
+    pub profiles_applied: BTreeMap<String, String>,
 }
 
 /// One installed version of an app.

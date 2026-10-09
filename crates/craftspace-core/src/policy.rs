@@ -35,7 +35,9 @@
 //!   "lock_settings": true, "prevent_uninstall": true,
 //!   "report_dir": "\\\\server\\craftspace\\reports",
 //!   "policy_url": "https://it.riverside.example/craftspace/policy.json",
-//!   "settings": { "package_cache": "\\\\server\\craftspace\\packages", "package_cache_write": true }
+//!   "settings": { "package_cache": "\\\\server\\craftspace\\packages", "package_cache_write": true },
+//!   "profiles": { "photocraft": { "source": "\\\\server\\craftspace\\photocraft.craftprofile",
+//!                                 "parts": ["layouts", "shortcuts"], "apply": "every-start" } }
 //! }
 //! ```
 
@@ -77,6 +79,9 @@ pub struct Policy {
     /// A policy published centrally: fetched on each check and used from the next start (and
     /// right away by `craftspace-cli apply-policy`). Its values replace this file's.
     pub policy_url: Option<String>,
+    /// app id → a workspace profile (layouts, shortcuts, preferences, presets) every computer
+    /// gets, e.g. the teacher's setup.
+    pub profiles: BTreeMap<String, ProfilePolicy>,
     /// Where the policy was read from.
     #[serde(skip)]
     pub source: Option<PathBuf>,
@@ -199,6 +204,31 @@ impl Policy {
             settings.clone()
         })
     }
+}
+
+/// A workspace profile the organization hands out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfilePolicy {
+    /// A `.craftprofile` file: a path (a file share works) or an `https://` address.
+    pub source: String,
+    /// Its SHA-256, to check it wasn't changed.
+    #[serde(default)]
+    pub sha256: Option<String>,
+    /// The parts to apply; empty means all.
+    #[serde(default)]
+    pub parts: Vec<crate::profiles::Part>,
+    #[serde(default)]
+    pub apply: ProfileApply,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProfileApply {
+    /// When the profile is new or changed; students' own changes stay after that.
+    #[default]
+    Once,
+    /// Each time CraftSpace starts (or `apply-policy` runs), so every class starts the same.
+    EveryStart,
 }
 
 /// When automatic updates may install: on these days, between these times (local time). A

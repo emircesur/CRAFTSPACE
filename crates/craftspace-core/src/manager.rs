@@ -25,6 +25,7 @@ use crate::news::{self, Article};
 use crate::paths::{write_atomic, Paths};
 use crate::platform::{AssetKind, Os, Platform};
 use crate::policy::Policy;
+use crate::profiles;
 use crate::settings::{Channel, Settings};
 use crate::state::{dir_size, InstalledApp, InstalledDb, InstalledVersion};
 use crate::zsync;
@@ -633,6 +634,146 @@ impl Manager {
         let file = dir.join(format!("{safe}.json"));
         write_atomic(&file, serde_json::to_string_pretty(&self.report())?.as_bytes())?;
         Ok(Some(file))
+    }
+
+    // ---- workspace profiles ------------------------------------------------------------------
+
+    fn profile_target(&self, id: &str) -> anyhow::Result<(&'static profiles::AppSpec, profiles::Context, AppEntry)> {
+        let app = self.require_app(id)?;
+        let spec =
+            profiles::spec(&app.id).ok_or_else(|| anyhow::anyhow!("{}", profiles::unsupported_reason(&app.id)))?;
+        let flatpak = self.installed_app(id).and_then(|a| a.current.external).and_then(|e| e.flatpak);
+        let ctx = profiles::Context { programs: self.programs(id), flatpak, name: app.name.clone() };
+        Ok((spec, ctx, app))
+    }
+
+    /// The parts of an app's setup a profile can carry, and anything to know about them.
+    pub fn profile_parts(&self, id: &str) -> anyhow::Result<(Vec<profiles::Part>, Option<&'static str>)> {
+        let (spec, _, _) = self.profile_target(id)?;
+        Ok((spec.parts(), spec.note))
+    }
+
+    /// Save `parts` of an app's setup (layouts, shortcuts, preferences, presets) to a profile.
+    pub fn export_profile(
+        &self,
+        id: &str,
+        parts: &[profiles::Part],
+        out: &Path,
+    ) -> anyhow::Result<profiles::ExportReport> {
+        let (spec, ctx, _) = self.profile_target(id)?;
+        let version = self.installed_app(id).map(|a| a.current.version.to_string());
+        profiles::export(spec, &ctx, parts, version, out)
+    }
+
+    /// Bring `parts` of a profile into the app on this computer. The current setup is saved
+    /// first; the returned path is that backup (import it to go back).
+    pub fn import_profile(
+        &self,
+        file: &Path,
+        parts: &[profiles::Part],
+    ) -> anyhow::Result<(profiles::ImportReport, Option<PathBuf>)> {
+        let manifest = profiles::read_manifest(file)?;
+        let (spec, ctx, app) = self.profile_target(&manifest.app)?;
+        anyhow::ensure!(
+            !self.is_running(&app.id),
+            "{} is open; close it first (it saves its settings when it quits)",
+            app.name
+        );
+        let backup =
+            self.profile_backup_dir().join(format!("{}-{}.{}", app.id, github::now_secs(), profiles::EXTENSION));
+        let backup = match profiles::export(spec, &ctx, &profiles::Part::ALL, None, &backup) {
+            Ok(_) => Some(backup),
+            Err(err) => {
+                log::info!("nothing to back up for {}: {err:#}", app.name);
+                None
+            }
+        };
+        let report = profiles::import(spec, &ctx, file, parts)?;
+        // Keep the last ten.
+        for old in self.profile_backups(&app.id).into_iter().skip(10) {
+            let _ = std::fs::remove_file(old);
+        }
+        Ok((report, backup))
+    }
+
+    pub fn profile_backup_dir(&self) -> PathBuf {
+        self.inner.paths.root.join("profiles").join("backups")
+    }
+
+    /// Saved setups to go back to, newest first.
+    pub fn profile_backups(&self, id: &str) -> Vec<PathBuf> {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(self.profile_backup_dir())
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with(&format!("{id}-")) && n.ends_with(profiles::EXTENSION))
+            })
+            .collect();
+        files.sort();
+        files.reverse();
+        files
+    }
+
+    /// Apply the workspace profiles the policy hands out: new or changed ones, and the
+    /// `every-start` ones when `starting`. Apps that are open are left for next time.
+    pub fn apply_policy_profiles(&self, starting: bool) -> Vec<(String, anyhow::Result<String>)> {
+        let mut results = Vec::new();
+        for (id, wanted) in self.inner.policy.profiles.clone() {
+            let result = (|| -> anyhow::Result<Option<String>> {
+                let app = self.require_app(&id)?;
+                let file = self.fetch_policy_profile(&id, &wanted)?;
+                let sha = download::sha256_file(&file)?;
+                if let Some(expected) = &wanted.sha256 {
+                    anyhow::ensure!(
+                        sha.eq_ignore_ascii_case(expected),
+                        "the profile for {} doesn't match its checksum",
+                        app.name
+                    );
+                }
+                let applied = self.installed().profiles_applied.get(&id) == Some(&sha);
+                let due = !applied || (starting && wanted.apply == crate::policy::ProfileApply::EveryStart);
+                if !due {
+                    return Ok(None);
+                }
+                if self.is_running(&id) {
+                    return Ok(Some(format!("{} is open; its profile is applied next time", app.name)));
+                }
+                let parts = if wanted.parts.is_empty() { profiles::Part::ALL.to_vec() } else { wanted.parts.clone() };
+                let (report, _) = self.import_profile(&file, &parts)?;
+                self.with_db(|db| db.profiles_applied.insert(id.clone(), sha))?;
+                Ok(Some(format!(
+                    "{}: applied the organization's profile ({} file{})",
+                    app.name,
+                    report.changed.len(),
+                    if report.changed.len() == 1 { "" } else { "s" }
+                )))
+            })();
+            match result {
+                Ok(Some(text)) => results.push((id, Ok(text))),
+                Ok(None) => {}
+                Err(err) => results.push((id, Err(err))),
+            }
+        }
+        results
+    }
+
+    fn fetch_policy_profile(&self, id: &str, wanted: &crate::policy::ProfilePolicy) -> anyhow::Result<PathBuf> {
+        if !wanted.source.starts_with("https://") {
+            let path = PathBuf::from(&wanted.source);
+            anyhow::ensure!(path.is_file(), "the profile {} isn't there", path.display());
+            return Ok(path);
+        }
+        let file = self.inner.paths.cache.join("profiles").join(format!("{id}.{}", profiles::EXTENSION));
+        std::fs::create_dir_all(file.parent().expect("has a parent"))?;
+        let cancel = AtomicBool::new(false);
+        let progress = Progress { report: &|_| {}, cancel: &cancel };
+        let _ = std::fs::remove_file(&file);
+        download::download(&self.inner.agent, &wanted.source, &file, wanted.sha256.as_deref(), &progress)?;
+        Ok(file)
     }
 
     /// Put an app's settings back to how they were on first start (between classes): its

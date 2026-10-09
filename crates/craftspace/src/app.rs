@@ -73,6 +73,13 @@ pub enum Action {
     Update(String),
     UpdateAll,
     AskUninstall(String),
+    /// Workspace sync (see views::profile).
+    OpenProfileExport(String),
+    /// Pick a .craftprofile and show what to bring in.
+    OpenProfileImport,
+    ImportProfileFile(PathBuf),
+    ExportProfile(String, Vec<craftspace_core::profiles::Part>, PathBuf),
+    ImportProfile(PathBuf, Vec<craftspace_core::profiles::Part>),
     /// "Reset settings…": ask, then move the app's settings aside.
     AskReset(String),
     Reset(String),
@@ -235,6 +242,7 @@ pub struct CraftSpaceApp {
     pub about_open: bool,
     /// Settings › Other sources: the add / change repository dialog.
     pub source_dialog: Option<views::sources::Dialog>,
+    pub profile_dialog: Option<views::profile::Dialog>,
     /// An install waiting for the one-time "portable or installer?" answer.
     pub install_mode_pending: Option<Action>,
     /// `craftspace open <file>` for an app that isn't installed: open it once it is.
@@ -332,6 +340,7 @@ impl CraftSpaceApp {
             pending_open: None,
             about_open: false,
             source_dialog: None,
+            profile_dialog: None,
             install_mode_pending: None,
             hidden_without_tray: None,
             quitting: false,
@@ -660,6 +669,21 @@ impl CraftSpaceApp {
                     }
                     Err(err) => log::warn!("couldn't apply the new policy: {err:#}"),
                 },
+                Msg::ProfileDone(result) => {
+                    self.profile_dialog = None;
+                    match result {
+                        Ok(text) => self.announce(ctx, ToastKind::Success, text),
+                        Err(text) => self.toast(ToastKind::Error, text),
+                    }
+                }
+                Msg::PolicyProfiles(results) => {
+                    for (id, result) in results {
+                        match result {
+                            Ok(text) => self.toast(ToastKind::Info, text),
+                            Err(text) => self.toast(ToastKind::Error, format!("{}: {text}", self.app_name(&id))),
+                        }
+                    }
+                }
                 Msg::ResetDone(id, result) => match result {
                     Ok(text) => self.announce(ctx, ToastKind::Success, text),
                     Err(text) => self.toast(ToastKind::Error, format!("Couldn't reset {}: {text}", self.app_name(&id))),
@@ -1040,6 +1064,27 @@ impl CraftSpaceApp {
                 }
                 Action::AskUninstall(id) => self.confirm_uninstall = Some(id),
                 Action::AskReset(id) => self.confirm_reset = Some(id),
+                Action::OpenProfileExport(id) => match self.manager.profile_parts(&id) {
+                    Ok((parts, note)) => self.profile_dialog = Some(views::profile::Dialog::export(id, parts, note)),
+                    Err(err) => self.toast(ToastKind::Error, format!("{err:#}")),
+                },
+                Action::OpenProfileImport => {
+                    if let Some(file) = rfd::FileDialog::new()
+                        .set_title("Bring in a setup")
+                        .add_filter("CraftSpace profile", &[craftspace_core::profiles::EXTENSION])
+                        .pick_file()
+                    {
+                        self.actions.push(Action::ImportProfileFile(file));
+                    }
+                }
+                Action::ImportProfileFile(file) => match craftspace_core::profiles::read_manifest(&file) {
+                    Ok(manifest) => self.profile_dialog = Some(views::profile::Dialog::import(file, manifest)),
+                    Err(err) => self.toast(ToastKind::Error, format!("{err:#}")),
+                },
+                Action::ExportProfile(id, parts, out) => {
+                    worker::export_profile(&self.bus, &self.manager, &id, parts, out)
+                }
+                Action::ImportProfile(file, parts) => worker::import_profile(&self.bus, &self.manager, file, parts),
                 Action::Reset(id) => worker::reset_app(&self.bus, &self.manager, &id),
                 Action::SaveReport => {
                     let report = self.manager.report();
@@ -1411,6 +1456,13 @@ impl CraftSpaceApp {
                     if ui.add_enabled(!self.refreshing, egui::Button::new("Check for updates")).clicked() {
                         self.actions.push(Action::Refresh);
                     }
+                    if ui
+                        .button("Bring in an app's setup…")
+                        .on_hover_text("Layouts, shortcuts, preferences and presets saved from another computer")
+                        .clicked()
+                    {
+                        self.actions.push(Action::OpenProfileImport);
+                    }
                     ui.separator();
                     if ui.button("About CraftSpace").clicked() {
                         self.actions.push(Action::OpenAbout);
@@ -1694,6 +1746,7 @@ impl CraftSpaceApp {
         views::files::setup_window(self, ctx);
         views::about::window(self, ctx);
         views::sources::window(self, ctx);
+        views::profile::window(self, ctx);
         views::install_mode::window(self, ctx);
     }
 }

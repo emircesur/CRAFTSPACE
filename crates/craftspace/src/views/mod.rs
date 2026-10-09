@@ -5,6 +5,7 @@ pub mod discover;
 pub mod downloads;
 pub mod files;
 pub mod install_mode;
+pub mod profile;
 pub mod settings;
 pub mod sources;
 pub mod tour;

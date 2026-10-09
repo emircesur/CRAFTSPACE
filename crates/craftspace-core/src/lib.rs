@@ -17,6 +17,7 @@ pub mod integrate;
 pub mod manager;
 pub mod paths;
 pub mod platform;
+pub mod profiles;
 pub mod selfupdate;
 pub mod settings;
 pub mod sources;

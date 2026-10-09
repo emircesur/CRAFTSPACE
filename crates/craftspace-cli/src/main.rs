@@ -15,7 +15,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use craftspace_core::download::format_bytes;
 use craftspace_core::manager::AppList;
 use craftspace_core::settings::Channel;
-use craftspace_core::{autostart, fonts, selfupdate, AppState, Manager, Progress, ProgressEvent, Stage};
+use craftspace_core::{autostart, fonts, profiles, selfupdate, AppState, Manager, Progress, ProgressEvent, Stage};
 use semver::Version;
 
 /// No progress output (set by `--quiet`).
@@ -156,6 +156,12 @@ enum Command {
         #[arg(long, short)]
         yes: bool,
     },
+    /// Workspace sync: an app's layouts, shortcuts, preferences and presets as one file, for
+    /// another computer or a whole classroom.
+    Profile {
+        #[command(subcommand)]
+        action: ProfileAction,
+    },
     /// Open a file in the ArtCraft app that handles it.
     OpenFile { file: PathBuf },
     /// Find ArtCraft apps installed without CraftSpace and keep them up to date where they are.
@@ -222,6 +228,35 @@ enum PolicyAction {
     Check { file: PathBuf },
     /// Fetch the centrally published policy (policy_url) now.
     Refresh,
+}
+
+#[derive(Subcommand)]
+enum ProfileAction {
+    /// Save an app's setup to a .craftprofile file.
+    Export {
+        app: String,
+        /// The file to write (default: <app>.craftprofile here).
+        #[arg(long, short)]
+        out: Option<PathBuf>,
+        /// Only these parts: layouts, shortcuts, preferences, presets (comma-separated).
+        #[arg(long, default_value = "")]
+        parts: String,
+    },
+    /// Bring a profile into its app on this computer (the current setup is saved first).
+    Import {
+        file: PathBuf,
+        /// Only these parts: layouts, shortcuts, preferences, presets (comma-separated).
+        #[arg(long, default_value = "")]
+        parts: String,
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// Show what a profile holds.
+    Show { file: PathBuf },
+    /// Show which parts an app's profiles can carry.
+    Parts { app: String },
+    /// List the setups saved before each import (import one to go back).
+    Backups { app: String },
 }
 
 #[derive(Subcommand)]
@@ -490,12 +525,94 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                     failed += 1;
                 }
             }
+            for (id, result) in manager.apply_policy_profiles(true) {
+                match result {
+                    Ok(text) => say!("{text}"),
+                    Err(err) => {
+                        eprintln!("error: {id}: profile: {err:#}");
+                        failed += 1;
+                    }
+                }
+            }
             match manager.write_report() {
                 Ok(Some(file)) => say!("Report: {}", file.display()),
                 Ok(None) => {}
                 Err(err) => eprintln!("warning: couldn't write the report: {err:#}"),
             }
         }
+        Command::Profile { action } => match action {
+            ProfileAction::Export { app, out, parts } => {
+                let parts = profiles::Part::parse_list(&parts)?;
+                let id = manager.app(&app).map(|a| a.id).unwrap_or(app);
+                let out = out.unwrap_or_else(|| PathBuf::from(format!("{id}.{}", profiles::EXTENSION)));
+                let report = manager.export_profile(&id, &parts, &out)?;
+                say!(
+                    "Saved {} ({} file{}) to {}",
+                    report.parts.iter().map(|p| p.label().to_lowercase()).collect::<Vec<_>>().join(", "),
+                    report.files,
+                    if report.files == 1 { "" } else { "s" },
+                    out.display()
+                );
+            }
+            ProfileAction::Import { file, parts, yes } => {
+                let manifest = profiles::read_manifest(&file)?;
+                let parts = profiles::Part::parse_list(&parts)?;
+                let name = manager.app(&manifest.app).map(|a| a.name).unwrap_or(manifest.app.clone());
+                if !yes && std::io::stdin().is_terminal() {
+                    eprint!(
+                        "Bring {} into {name} on this computer? Its current setup is saved first. [y/N] ",
+                        parts.iter().map(|p| p.label().to_lowercase()).collect::<Vec<_>>().join(", ")
+                    );
+                    let mut answer = String::new();
+                    std::io::stdin().read_line(&mut answer)?;
+                    if !answer.trim().eq_ignore_ascii_case("y") {
+                        return Ok(ExitCode::SUCCESS);
+                    }
+                }
+                let (report, backup) = manager.import_profile(&file, &parts)?;
+                say!(
+                    "{name}: updated {} file{}.",
+                    report.changed.len(),
+                    if report.changed.len() == 1 { "" } else { "s" }
+                );
+                if let Some(backup) = backup {
+                    say!("The previous setup is saved in {} (import it to go back).", backup.display());
+                }
+            }
+            ProfileAction::Show { file } => {
+                let m = profiles::read_manifest(&file)?;
+                let name = manager.app(&m.app).map(|a| a.name).unwrap_or(m.app.clone());
+                println!(
+                    "{name}{} profile, made on {}",
+                    m.app_version.map(|v| format!(" {v}")).unwrap_or_default(),
+                    if m.os.is_empty() { "?".into() } else { m.os }
+                );
+                println!("Parts: {}", m.parts.iter().map(|p| p.label()).collect::<Vec<_>>().join(", "));
+                for f in m.files {
+                    println!("  {}/{}", f.root, f.path);
+                }
+            }
+            ProfileAction::Parts { app } => {
+                let id = manager.app(&app).map(|a| a.id).unwrap_or(app);
+                let (parts, note) = manager.profile_parts(&id)?;
+                for p in parts {
+                    println!("{:<12} {}", format!("{p:?}").to_lowercase(), p.label());
+                }
+                if let Some(note) = note {
+                    println!("Note: {note}");
+                }
+            }
+            ProfileAction::Backups { app } => {
+                let id = manager.app(&app).map(|a| a.id).unwrap_or(app);
+                let backups = manager.profile_backups(&id);
+                if backups.is_empty() {
+                    say!("No saved setups for {id} yet.");
+                }
+                for b in backups {
+                    println!("{}", b.display());
+                }
+            }
+        },
         Command::Policy { action } => match action {
             PolicyAction::Show { json } => {
                 let policy = manager.policy();

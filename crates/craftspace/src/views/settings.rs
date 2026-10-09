@@ -320,6 +320,13 @@ fn it_section(app: &mut CraftSpaceApp, ui: &mut Ui, p: &theme::Palette, policy: 
             if policy.prevent_uninstall {
                 facts.push("Apps can't be uninstalled or rolled back (except by an administrator).".into());
             }
+            for (id, profile) in &policy.profiles {
+                let when = match profile.apply {
+                    craftspace_core::policy::ProfileApply::Once => "when it changes",
+                    craftspace_core::policy::ProfileApply::EveryStart => "at every start",
+                };
+                facts.push(format!("{} gets the organization's setup {when}.", app.app_name(id)));
+            }
             if let Some(dir) = &policy.report_dir {
                 facts.push(format!("A status report is saved to {} after each check.", dir.display()));
             }
@@ -383,7 +390,7 @@ fn it_section(app: &mut CraftSpaceApp, ui: &mut Ui, p: &theme::Palette, policy: 
             app.actions.push(Action::FillCache);
         }
     });
-    ui.label(weak("To give an app fresh settings, use \"Reset settings…\" in its ••• menu.".into()));
+    ui.label(weak("To give an app fresh settings, use \"Reset settings…\" in its ••• menu. To set up every computer like this one, use \"Save its setup…\" there and hand the file out with the policy's \"profiles\".".into()));
 }
 
 fn names(app: &CraftSpaceApp, ids: &[String]) -> String {

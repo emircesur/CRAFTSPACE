@@ -113,6 +113,9 @@ pub enum Msg {
     SourceChecked(Result<craftspace_core::sources::SourceCheck, String>),
     /// An add/remove/change of other sources finished (message for the user).
     SourceDone(Result<String, String>),
+    ProfileDone(Result<String, String>),
+    /// Workspace profiles from the policy: (app id, what happened).
+    PolicyProfiles(Vec<(String, Result<String, String>)>),
     /// The organization's central policy changed (reopen the manager).
     PolicyChanged,
     ResetDone(String, Result<String, String>),
@@ -226,6 +229,15 @@ pub fn refresh(bus: &Bus, manager: &Manager, force: bool, manual: bool) {
         }
         let errors = manager.refresh_all(force).into_iter().map(|(id, e)| (id, format!("{e:#}"))).collect();
         bus.send(Msg::Refreshed { errors, manual });
+        // The organization's workspace profiles (the every-start ones on the first check).
+        static STARTED: AtomicBool = AtomicBool::new(false);
+        let starting = !STARTED.swap(true, Ordering::Relaxed);
+        let applied = manager.apply_policy_profiles(starting);
+        if !applied.is_empty() {
+            bus.send(Msg::PolicyProfiles(
+                applied.into_iter().map(|(id, r)| (id, r.map_err(|e| format!("{e:#}")))).collect(),
+            ));
+        }
         if let Err(err) = manager.write_report() {
             log::warn!("couldn't write the status report: {err:#}");
         }
@@ -286,6 +298,46 @@ pub fn verify(bus: &Bus, manager: &Manager, id: &str) {
     bus.spawn("verify", move |bus| {
         let result = manager.verify(&id).map_err(|e| format!("{e:#}"));
         bus.send(Msg::Verified(id, result));
+    });
+}
+
+pub fn export_profile(
+    bus: &Bus,
+    manager: &Manager,
+    id: &str,
+    parts: Vec<craftspace_core::profiles::Part>,
+    out: std::path::PathBuf,
+) {
+    let (manager, id) = (manager.clone(), id.to_string());
+    bus.spawn("profile", move |bus| {
+        let result = manager
+            .export_profile(&id, &parts, &out)
+            .map(|r| format!("Saved {} file{} to {}", r.files, if r.files == 1 { "" } else { "s" }, out.display()))
+            .map_err(|e| format!("{e:#}"));
+        bus.send(Msg::ProfileDone(result));
+    });
+}
+
+pub fn import_profile(
+    bus: &Bus,
+    manager: &Manager,
+    file: std::path::PathBuf,
+    parts: Vec<craftspace_core::profiles::Part>,
+) {
+    let manager = manager.clone();
+    bus.spawn("profile", move |bus| {
+        let result = manager
+            .import_profile(&file, &parts)
+            .map(|(r, _)| {
+                format!(
+                    "Brought in {} ({} file{}); it applies the next time the app starts",
+                    r.parts.iter().map(|p| p.label().to_lowercase()).collect::<Vec<_>>().join(", "),
+                    r.changed.len(),
+                    if r.changed.len() == 1 { "" } else { "s" }
+                )
+            })
+            .map_err(|e| format!("{e:#}"));
+        bus.send(Msg::ProfileDone(result));
     });
 }
 

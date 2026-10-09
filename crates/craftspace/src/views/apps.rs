@@ -493,6 +493,19 @@ pub fn more_menu(app: &mut CraftSpaceApp, ui: &mut Ui, s: &AppState) {
         if ui.button("Website ↗").clicked() {
             app.actions.push(Action::OpenUrl(s.app.homepage()));
         }
+        if craftspace_core::profiles::spec(&id).is_some() {
+            ui.separator();
+            if ui
+                .button("Save its setup…")
+                .on_hover_text("Layouts, shortcuts, preferences and presets, for another computer or a classroom")
+                .clicked()
+            {
+                app.actions.push(Action::OpenProfileExport(id.clone()));
+            }
+            if ui.button("Bring in a setup…").clicked() {
+                app.actions.push(Action::OpenProfileImport);
+            }
+        }
         if s.installed.is_some() {
             ui.separator();
             if ui
