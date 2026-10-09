@@ -186,7 +186,14 @@ if CRAFTSPACE_POLICY="$RUNNER_TEMP/addon-policy.json" "$cli" addons install six-
 test ! -e "$HOME/.clap/Dexed.clap"
 test ! -e "$HOME/.vst3/Dexed.vst3"
 test ! -e "$XDG_CONFIG_HOME/vectorcraft/Swatches/CraftSpace Earth.gpl"
-"$cli" addons sources
+# Add-on repositories: listed apart from the registry, added by owner/repo.
+"$cli" addons repos remove artcraft-store
+if "$cli" addons list | grep -q "artcraft-store/"; then echo "a turned-off repository is still listed"; exit 1; fi
+"$cli" addons repos add akkk09/artcraft-store | tee "$RUNNER_TEMP/repo.txt"
+grep -q "ArtCraft Store (id: artcraft-store)" "$RUNNER_TEMP/repo.txt"
+"$cli" addons repos | grep -q "github.com/akkk09/artcraft-store"
+if "$cli" addons repos add emircesur/CRAFTSPACE; then echo "a repository without a catalog was added"; exit 1; fi
+"$cli" addons check addons/registry.json
 "$cli" addons repositories | grep -q "Airwindows"
 export CRAFTSPACE_HOME="$RUNNER_TEMP/cs"
 

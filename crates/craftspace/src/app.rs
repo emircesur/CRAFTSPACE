@@ -226,6 +226,12 @@ pub struct CraftSpaceApp {
     pub addons: Vec<craftspace_core::addons::Addon>,
     pub addon_app: Option<String>,
     pub addon_checked_only: bool,
+    /// The CraftSpace registry, or the add-on repositories.
+    pub addon_repos_tab: bool,
+    pub addon_repo_input: String,
+    /// Adding a repository: in progress, or what happened.
+    pub addon_repo_busy: bool,
+    pub addon_repo_status: Option<Result<String, String>>,
     pub confirm_addon: Option<String>,
     pub addons_requested: bool,
     fonts_loading: bool,
@@ -334,6 +340,10 @@ impl CraftSpaceApp {
             addons: Vec::new(),
             addon_app: None,
             addon_checked_only: false,
+            addon_repos_tab: false,
+            addon_repo_input: String::new(),
+            addon_repo_busy: false,
+            addon_repo_status: None,
             confirm_addon: None,
             addons_requested: false,
             verify_results: HashMap::new(),
@@ -386,6 +396,10 @@ impl CraftSpaceApp {
                 "updates" => app.apps_view = AppsView::Updates,
                 "installed" => app.apps_view = AppsView::Installed,
                 "addons" => app.apps_view = AppsView::Addons,
+                "addon-repos" => {
+                    app.apps_view = AppsView::Addons;
+                    app.addon_repos_tab = true;
+                }
                 "about" => app.about_open = true,
                 other => {
                     if let Some(rest) = other.strip_prefix("app:") {
@@ -689,6 +703,15 @@ impl CraftSpaceApp {
                     Err(err) => log::warn!("couldn't apply the new policy: {err:#}"),
                 },
                 Msg::Addons(list) => self.addons = list,
+                Msg::AddonRepo(result) => {
+                    self.addon_repo_busy = false;
+                    // The repository is saved in the settings.
+                    self.settings = self.manager.settings();
+                    if result.is_ok() {
+                        self.addon_repo_input.clear();
+                    }
+                    self.addon_repo_status = Some(result);
+                }
                 Msg::ProfileDone(result) => {
                     self.profile_dialog = None;
                     match result {

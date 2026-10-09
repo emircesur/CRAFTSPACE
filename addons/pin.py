@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Prints the SHA-256, size and contents of add-on downloads, for pinning them in catalog.json.
+"""Prints the SHA-256, size and contents of add-on downloads, for pinning them in addons/registry.json.
 
     python3 addons/pin.py URL...      (or URLs one per line on stdin)
 
 Run by the "Pin add-ons" workflow, since add-ons are pinned to exact files: CraftSpace checks
-every download against the catalog's SHA-256 before installing it.
+every download against the registry's SHA-256 before installing it.
 """
 
 import hashlib

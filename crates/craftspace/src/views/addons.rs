@@ -58,9 +58,9 @@ pub fn content(app: &mut CraftSpaceApp, ui: &mut Ui) {
     ui.add_space(30.0);
 }
 
-/// The add-ons from the CraftSpace registry and the add-on stores.
+/// The add-ons: the CraftSpace registry's, and each add-on repository's apart from them.
 fn addon_list(app: &mut CraftSpaceApp, ui: &mut Ui) {
-    use craftspace_core::addons::{self, Kind};
+    use craftspace_core::addons;
     let p = app.palette;
     if app.addons.is_empty() && !app.addons_requested {
         app.addons_requested = true;
@@ -77,11 +77,24 @@ fn addon_list(app: &mut CraftSpaceApp, ui: &mut Ui) {
     });
     ui.label(
         RichText::new("Each add-on goes where its app finds it. CraftSpace checks every download against its checksum when one is published.")
+            .size(12.5)
             .color(p.weak),
     );
-    ui.add_space(6.0);
+    ui.add_space(8.0);
 
-    // Filters: app, checked only.
+    let stores = app.manager.addon_stores();
+    let registry_count = app.addons.iter().filter(|a| a.source == "CraftSpace").count();
+    ui.horizontal(|ui| {
+        if ui.selectable_label(!app.addon_repos_tab, format!("CraftSpace registry · {registry_count}")).clicked() {
+            app.addon_repos_tab = false;
+        }
+        if ui.selectable_label(app.addon_repos_tab, format!("Repositories · {}", stores.len())).clicked() {
+            app.addon_repos_tab = true;
+        }
+    });
+    ui.add_space(4.0);
+
+    // Filters: app, and checked only (the registry's: nothing in a repository is checked).
     let mut apps: Vec<String> = Vec::new();
     for a in &app.addons {
         for id in &a.apps {
@@ -100,11 +113,17 @@ fn addon_list(app: &mut CraftSpaceApp, ui: &mut Ui) {
                 app.addon_app = Some(id.clone());
             }
         }
-        ui.separator();
-        ui.checkbox(&mut app.addon_checked_only, "Checked by CraftSpace only");
+        if !app.addon_repos_tab {
+            ui.separator();
+            ui.checkbox(&mut app.addon_checked_only, "Checked by CraftSpace only");
+        }
     });
     ui.add_space(8.0);
 
+    if app.addon_repos_tab {
+        repositories(app, ui, &stores);
+        return;
+    }
     if app.addons.is_empty() {
         ui.horizontal(|ui| {
             ui.add(egui::Spinner::new());
@@ -112,119 +131,21 @@ fn addon_list(app: &mut CraftSpaceApp, ui: &mut Ui) {
         });
         return;
     }
-    let installed = app.manager.installed_addons();
-    let blocked = app.manager.policy().block_unchecked_addons;
-    let platform = app.manager.platform();
     let list: Vec<addons::Addon> = app
         .addons
         .iter()
+        .filter(|a| a.source == "CraftSpace")
         .filter(|a| app.addon_app.as_ref().is_none_or(|id| a.apps.contains(id)))
         .filter(|a| !app.addon_checked_only || a.checked())
         .cloned()
         .collect();
-    let mut sources: Vec<String> = Vec::new();
     for a in &list {
-        if !sources.contains(&a.source) {
-            sources.push(a.source.clone());
-        }
-    }
-    for source in sources {
-        let from_registry = source == "CraftSpace";
-        ui.add_space(6.0);
-        ui.label(
-            RichText::new(if from_registry {
-                "From the CraftSpace registry".to_string()
-            } else {
-                format!("From {source}")
-            })
-            .size(15.0)
-            .strong(),
-        );
-        if !from_registry {
-            ui.label(
-                RichText::new("A community store. CraftSpace hasn't checked its add-ons for security.")
-                    .size(12.0)
-                    .color(p.warn),
-            );
-        }
-        for a in list.iter().filter(|a| a.source == source) {
-            let key = format!("addons:{}", a.id);
-            let busy = app.jobs.contains_key(&key);
-            let is_installed = installed.contains_key(&a.id);
-            let file = a.file_for(platform);
-            theme::card_frame(&p, false).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    let text_width = (ui.available_width() - 150.0).max(200.0);
-                    ui.vertical(|ui| {
-                        ui.set_max_width(text_width);
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new(&a.name).size(15.0).strong());
-                            if let Some(v) = &a.version {
-                                ui.label(RichText::new(v).size(12.0).color(p.weak));
-                            }
-                            if a.checked() {
-                                theme::chip(ui, "✔ Checked by CraftSpace", p.good);
-                            } else {
-                                theme::chip(ui, "⚠ Not checked for security", p.warn);
-                            }
-                            theme::chip(ui, a.kind.label(), p.accent);
-                            if is_installed {
-                                theme::chip(ui, "Installed", p.good);
-                            }
-                        });
-                        ui.add(egui::Label::new(RichText::new(&a.description).color(p.weak)).wrap());
-                        let mut meta: Vec<String> = Vec::new();
-                        meta.push(format!(
-                            "For {}",
-                            a.apps.iter().map(|id| app.app_name(id)).collect::<Vec<_>>().join(", ")
-                        ));
-                        if let Some(author) = &a.author {
-                            meta.push(format!("by {author}"));
-                        }
-                        if let Some(license) = &a.license {
-                            meta.push(license.clone());
-                        }
-                        if file.is_some_and(|f| f.sha256.is_none()) {
-                            meta.push("no checksum published".into());
-                        }
-                        ui.label(RichText::new(meta.join(" · ")).size(12.0).color(p.weak));
-                    });
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if busy {
-                            ui.add(egui::Spinner::new());
-                        } else if is_installed {
-                            if ui.button("Remove").clicked() {
-                                app.actions.push(Action::RemoveAddon(a.id.clone()));
-                            }
-                        } else if file.is_none() {
-                            ui.label(RichText::new(format!("Not for {}", platform.display())).size(12.0).color(p.weak));
-                        } else if blocked && !a.checked() {
-                            ui.label(RichText::new("Not allowed here").size(12.0).color(p.weak))
-                                .on_hover_text("Your organization allows only add-ons checked by CraftSpace");
-                        } else if theme::primary(ui, &p, "Install").clicked() {
-                            app.actions.push(Action::InstallAddon(a.id.clone()));
-                        }
-                        if let Some(home) = &a.homepage {
-                            if ui.small_button("↗").on_hover_text(home.as_str()).clicked() {
-                                app.actions.push(Action::OpenUrl(home.clone()));
-                            }
-                        }
-                    });
-                });
-                if is_installed && a.kind == Kind::Pack {
-                    let library = app.manager.addon_library().join(addons::safe_name(&a.name));
-                    if library.exists() && ui.small_button("Show files").clicked() {
-                        app.actions.push(Action::OpenPath(library));
-                    }
-                }
-            });
-        }
+        addon_card(app, ui, a);
     }
 
     // Plug-in sources CraftSpace lists but doesn't install from.
-    let repos = app.manager.addon_registry().repositories;
-    if !repos.is_empty() {
+    let elsewhere = app.manager.addon_registry().repositories;
+    if !elsewhere.is_empty() {
         ui.add_space(14.0);
         ui.label(RichText::new("More plug-in sources").size(15.0).strong());
         ui.label(
@@ -232,7 +153,7 @@ fn addon_list(app: &mut CraftSpaceApp, ui: &mut Ui) {
                 .size(12.0)
                 .color(p.warn),
         );
-        for r in repos.iter().filter(|r| app.addon_app.as_ref().is_none_or(|id| r.apps.contains(id))) {
+        for r in elsewhere.iter().filter(|r| app.addon_app.as_ref().is_none_or(|id| r.apps.contains(id))) {
             ui.horizontal(|ui| {
                 if ui.link(&r.name).clicked() {
                     app.actions.push(Action::OpenUrl(r.url.clone()));
@@ -241,6 +162,198 @@ fn addon_list(app: &mut CraftSpaceApp, ui: &mut Ui) {
             });
         }
     }
+}
+
+/// Add-on repositories: the ArtCraft Store and others people add, each with its add-ons.
+fn repositories(app: &mut CraftSpaceApp, ui: &mut Ui, stores: &[(craftspace_core::addons::Store, bool)]) {
+    use craftspace_core::addons;
+    let p = app.palette;
+    ui.add(
+        egui::Label::new(
+            RichText::new("Add-on repositories on GitHub, apart from the CraftSpace registry. CraftSpace hasn't checked their add-ons for security; it asks before installing one.")
+                .size(12.5)
+                .color(p.warn),
+        )
+        .wrap(),
+    );
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        let edit = egui::TextEdit::singleline(&mut app.addon_repo_input)
+            .hint_text("owner/repo, or the https:// address of a catalog")
+            .desired_width(340.0);
+        let response = ui.add_enabled(!app.addon_repo_busy, edit);
+        let ready = !app.addon_repo_busy && addons::parse_repo_address(&app.addon_repo_input).is_ok();
+        let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if app.addon_repo_busy {
+            ui.add(egui::Spinner::new());
+        } else if ui.add_enabled(ready, egui::Button::new("Add repository")).clicked() || (enter && ready) {
+            app.addon_repo_busy = true;
+            app.addon_repo_status = None;
+            crate::worker::add_addon_repo(&app.bus, &app.manager, app.addon_repo_input.trim().to_string());
+        }
+        if ui.link("Make a CraftSpace-compatible repo ↗").clicked() {
+            app.actions.push(Action::OpenUrl(addons::REPO_GUIDE_URL.into()));
+        }
+    });
+    match &app.addon_repo_status {
+        Some(Ok(name)) => {
+            ui.label(RichText::new(format!("Added {name}.")).size(12.5).color(p.good));
+        }
+        Some(Err(err)) => {
+            ui.add(egui::Label::new(RichText::new(err).size(12.5).color(p.bad)).wrap());
+        }
+        None => {}
+    }
+    ui.add_space(8.0);
+
+    let suggested: Vec<String> = app.manager.addon_registry().stores.into_iter().map(|s| s.id).collect();
+    let mut changed = false;
+    for (store, on) in stores {
+        theme::card_frame(&p, false).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_max_width((ui.available_width() - 170.0).max(240.0));
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(&store.name).size(16.0).strong());
+                        theme::chip(ui, "Repository", p.accent);
+                        theme::chip(ui, "⚠ Not checked for security", p.warn);
+                        if suggested.contains(&store.id) {
+                            ui.label(RichText::new("suggested by CraftSpace").size(12.0).color(p.weak));
+                        }
+                    });
+                    let (label, link) = match &store.repo {
+                        Some(repo) => (format!("github.com/{repo} ↗"), format!("https://github.com/{repo}")),
+                        None => {
+                            (format!("{} ↗", store.url), store.homepage.clone().unwrap_or_else(|| store.url.clone()))
+                        }
+                    };
+                    if ui.link(RichText::new(label).size(12.5)).clicked() {
+                        app.actions.push(Action::OpenUrl(link));
+                    }
+                    if !store.description.is_empty() {
+                        ui.add(egui::Label::new(RichText::new(&store.description).size(12.5).color(p.weak)).wrap());
+                    }
+                });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if !suggested.contains(&store.id) && ui.button("Remove").clicked() {
+                        let _ = app.manager.remove_addon_repo(&store.id);
+                        changed = true;
+                    }
+                    let mut enabled = *on;
+                    if ui.checkbox(&mut enabled, "On").changed() {
+                        let _ = app.manager.set_addon_repo_enabled(&store.id, enabled);
+                        changed = true;
+                    }
+                });
+            });
+        });
+        if !*on {
+            ui.add_space(6.0);
+            continue;
+        }
+        let list: Vec<addons::Addon> = app
+            .addons
+            .iter()
+            .filter(|a| a.source == store.name)
+            .filter(|a| app.addon_app.as_ref().is_none_or(|id| a.apps.contains(id)))
+            .cloned()
+            .collect();
+        if list.is_empty() {
+            let text = match &app.addon_app {
+                Some(id) => format!("Nothing for {} here.", app.app_name(id)),
+                None => "No add-ons loaded from it yet (Refresh in the top bar).".to_string(),
+            };
+            ui.label(RichText::new(text).size(12.5).color(p.weak));
+        }
+        ui.indent(("repo-addons", &store.id), |ui| {
+            for a in &list {
+                addon_card(app, ui, a);
+            }
+        });
+        ui.add_space(10.0);
+    }
+    if changed {
+        app.settings = app.manager.settings();
+        crate::worker::refresh_addons(&app.bus, &app.manager);
+    }
+}
+
+/// One add-on: what it is, whether CraftSpace checked it, and Install / Remove.
+fn addon_card(app: &mut CraftSpaceApp, ui: &mut Ui, a: &craftspace_core::addons::Addon) {
+    use craftspace_core::addons::{self, Kind};
+    let p = app.palette;
+    let installed = app.manager.installed_addons();
+    let blocked = app.manager.policy().block_unchecked_addons;
+    let platform = app.manager.platform();
+    let key = format!("addons:{}", a.id);
+    let busy = app.jobs.contains_key(&key);
+    let is_installed = installed.contains_key(&a.id);
+    let file = a.file_for(platform);
+    theme::card_frame(&p, false).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            let text_width = (ui.available_width() - 150.0).max(200.0);
+            ui.vertical(|ui| {
+                ui.set_max_width(text_width);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(&a.name).size(15.0).strong());
+                    if let Some(v) = &a.version {
+                        ui.label(RichText::new(v).size(12.0).color(p.weak));
+                    }
+                    if a.checked() {
+                        theme::chip(ui, "✔ Checked by CraftSpace", p.good);
+                    } else {
+                        theme::chip(ui, "⚠ Not checked for security", p.warn);
+                    }
+                    theme::chip(ui, a.kind.label(), p.accent);
+                    if is_installed {
+                        theme::chip(ui, "Installed", p.good);
+                    }
+                });
+                ui.add(egui::Label::new(RichText::new(&a.description).color(p.weak)).wrap());
+                let mut meta: Vec<String> = Vec::new();
+                meta.push(format!("For {}", a.apps.iter().map(|id| app.app_name(id)).collect::<Vec<_>>().join(", ")));
+                if let Some(author) = &a.author {
+                    meta.push(format!("by {author}"));
+                }
+                if let Some(license) = &a.license {
+                    meta.push(license.clone());
+                }
+                if file.is_some_and(|f| f.sha256.is_none()) {
+                    meta.push("no checksum published".into());
+                }
+                ui.label(RichText::new(meta.join(" · ")).size(12.0).color(p.weak));
+            });
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if busy {
+                    ui.add(egui::Spinner::new());
+                } else if is_installed {
+                    if ui.button("Remove").clicked() {
+                        app.actions.push(Action::RemoveAddon(a.id.clone()));
+                    }
+                } else if file.is_none() {
+                    ui.label(RichText::new(format!("Not for {}", platform.display())).size(12.0).color(p.weak));
+                } else if blocked && !a.checked() {
+                    ui.label(RichText::new("Not allowed here").size(12.0).color(p.weak))
+                        .on_hover_text("Your organization allows only add-ons checked by CraftSpace");
+                } else if theme::primary(ui, &p, "Install").clicked() {
+                    app.actions.push(Action::InstallAddon(a.id.clone()));
+                }
+                if let Some(home) = &a.homepage {
+                    if ui.small_button("↗").on_hover_text(home.as_str()).clicked() {
+                        app.actions.push(Action::OpenUrl(home.clone()));
+                    }
+                }
+            });
+        });
+        if is_installed && a.kind == Kind::Pack {
+            let library = app.manager.addon_library().join(addons::safe_name(&a.name));
+            if library.exists() && ui.small_button("Show files").clicked() {
+                app.actions.push(Action::OpenPath(library));
+            }
+        }
+    });
 }
 
 /// "Install anyway?" for an add-on CraftSpace hasn't checked.

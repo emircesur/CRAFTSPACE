@@ -192,9 +192,9 @@ pub fn window(app: &mut CraftSpaceApp, ctx: &egui::Context) {
             section(ui, &p, "IT & Classroom");
             it_section(app, ui, &p, &policy, &mut draft);
 
-            section(ui, &p, "Add-on sources");
-            ui.label(RichText::new("Besides the CraftSpace registry, add-ons can come from community stores. CraftSpace hasn't checked their add-ons for security; it asks before installing one.").size(12.0).color(p.weak));
-            for (store, on) in app.manager.addon_stores() {
+            section(ui, &p, "Add-on repositories");
+            ui.label(RichText::new("Besides the CraftSpace registry, add-ons can come from repositories such as the ArtCraft Store. CraftSpace hasn't checked their add-ons for security; it asks before installing one.").size(12.0).color(p.weak));
+            for (store, _) in app.manager.addon_stores() {
                 let mut enabled = !draft.addon_stores.disabled.contains(&store.id);
                 ui.horizontal(|ui| {
                     if ui.checkbox(&mut enabled, RichText::new(&store.name).strong()).changed() {
@@ -204,36 +204,21 @@ pub fn window(app: &mut CraftSpaceApp, ctx: &egui::Context) {
                             draft.addon_stores.disabled.push(store.id.clone());
                         }
                     }
-                    let _ = on;
-                    if let Some(home) = &store.homepage {
-                        if ui.small_button("↗").on_hover_text(home.as_str()).clicked() {
-                            app.actions.push(Action::OpenUrl(home.clone()));
-                        }
+                    if let Some(repo) = &store.repo {
+                        ui.label(RichText::new(format!("github.com/{repo}")).size(12.0).color(p.weak));
                     }
                     if draft.addon_stores.custom.iter().any(|s| s.id == store.id) && ui.small_button("Remove").clicked() {
                         draft.addon_stores.custom.retain(|s| s.id != store.id);
                     }
                 });
-                if !store.description.is_empty() {
-                    ui.label(RichText::new(&store.description).size(12.0).color(p.weak));
-                }
             }
-            ui.horizontal(|ui| {
-                let id = egui::Id::new("new-addon-store");
-                let mut url: String = ui.data_mut(|d| d.get_temp(id).unwrap_or_default());
-                ui.add(egui::TextEdit::singleline(&mut url).hint_text("https://… catalog.json of another store").desired_width(360.0));
-                let valid = url.trim().starts_with("https://") && url.trim().len() > 12;
-                if ui.add_enabled(valid, egui::Button::new("Add store")).clicked() {
-                    let url = url.trim().to_string();
-                    let host = url.trim_start_matches("https://").split('/').next().unwrap_or("store").to_string();
-                    let store_id = craftspace_core::addons::slug(&host.to_ascii_lowercase());
-                    draft.addon_stores.custom.retain(|s| s.id != store_id);
-                    draft.addon_stores.custom.push(craftspace_core::addons::Store { id: store_id, name: host, url, homepage: None, description: String::new() });
-                    ui.data_mut(|d| d.remove::<String>(id));
-                } else {
-                    ui.data_mut(|d| d.insert_temp(id, url));
-                }
-            });
+            if ui.button("Add a repository…").on_hover_text("Saves these settings, then opens Fonts & add-ons › Repositories").clicked() {
+                app.apps_view = crate::app::AppsView::Addons;
+                app.addon_repos_tab = true;
+                app.tab = crate::app::Tab::Apps;
+                save = true;
+                keep_open = false;
+            }
 
             section(ui, &p, "Other sources (advanced)");
             ui.add_enabled(

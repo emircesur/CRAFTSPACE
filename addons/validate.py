@@ -91,6 +91,8 @@ def main():
                 err(f"store {s.get('id', '?')}", f"needs {key}")
         if not s.get("url", "").startswith("https://"):
             err(f"store {s.get('id', '?')}", "url must be https://")
+        if s.get("repo") is not None and not re.match(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", s["repo"]):
+            err(f"store {s.get('id', '?')}", "repo is owner/repo")
     for r in reg.get("repositories", []):
         if not r.get("url", "").startswith("https://") or not r.get("name"):
             err(f"repository {r.get('name', '?')}", "needs a name and an https:// url")

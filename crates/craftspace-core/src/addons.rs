@@ -27,6 +27,9 @@ use crate::platform::{Os, Platform};
 pub const REGISTRY_URL: &str = "https://raw.githubusercontent.com/emircesur/CRAFTSPACE/main/addons/registry.json";
 /// Where people submit add-ons.
 pub const SUBMIT_URL: &str = "https://github.com/emircesur/CRAFTSPACE/blob/main/addons/README.md";
+/// How to make a CraftSpace-compatible add-on repo.
+pub const REPO_GUIDE_URL: &str =
+    "https://github.com/emircesur/CRAFTSPACE/blob/main/addons/README.md#craftspace-compatible-add-on-repos";
 /// The registry this build ships with, for offline use.
 pub const BUILTIN_REGISTRY: &str = include_str!("../../../addons/registry.json");
 
@@ -141,17 +144,158 @@ impl Addon {
     }
 }
 
-/// Another add-on store: a catalog in the CraftSpace registry format, or in the ArtCraft Store
-/// format (`plugins` with `downloadUrl` / `releaseAsset` / `artifact`).
+/// An add-on repository besides the CraftSpace registry: a catalog in the CraftSpace registry
+/// format (a "CraftSpace-compatible add-on repo" has one as `craftspace-addons.json` at its
+/// root), or in the ArtCraft Store format (`plugins` with `downloadUrl` / `releaseAsset` /
+/// `artifact`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Store {
     pub id: String,
     pub name: String,
+    /// The catalog CraftSpace reads.
     pub url: String,
+    /// The GitHub repository (`owner/repo`) it comes from, when it's one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
     #[serde(default)]
     pub homepage: Option<String>,
     #[serde(default)]
     pub description: String,
+}
+
+/// The catalog file a CraftSpace-compatible add-on repo has at its root.
+pub const REPO_FILE: &str = "craftspace-addons.json";
+
+/// What someone typed to add a repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepoAddress {
+    /// A GitHub repository, `owner/repo`.
+    GitHub { owner: String, repo: String },
+    /// The address of a catalog file.
+    Catalog(String),
+}
+
+/// `owner/repo`, `github.com/owner/repo`, `https://github.com/owner/repo[.git][/…]`, or the
+/// `https://` address of a catalog.
+pub fn parse_repo_address(input: &str) -> anyhow::Result<RepoAddress> {
+    let s = input.trim().trim_end_matches('/');
+    let path = s
+        .strip_prefix("https://github.com/")
+        .or_else(|| s.strip_prefix("http://github.com/"))
+        .or_else(|| s.strip_prefix("github.com/"))
+        .or_else(|| (!s.contains("://")).then_some(s));
+    if let Some(path) = path {
+        let mut parts = path.split('/');
+        let (Some(owner), Some(repo)) = (parts.next(), parts.next()) else {
+            anyhow::bail!("type a GitHub repository as owner/repo, or the https:// address of a catalog");
+        };
+        let repo = repo.trim_end_matches(".git");
+        let ok = |p: &str| {
+            !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) && p != "." && p != ".."
+        };
+        anyhow::ensure!(ok(owner) && ok(repo), "{input} isn't a GitHub repository (owner/repo)");
+        return Ok(RepoAddress::GitHub { owner: owner.to_string(), repo: repo.to_string() });
+    }
+    anyhow::ensure!(s.starts_with("https://"), "a catalog's address must start with https://");
+    Ok(RepoAddress::Catalog(s.to_string()))
+}
+
+/// Where a GitHub repository's catalog may be, in the order CraftSpace looks: a
+/// CraftSpace-compatible repo's `craftspace-addons.json`, then a `catalog.json` on its GitHub
+/// Pages site (the ArtCraft Store publishes its downloads there) or in the repository.
+pub fn repo_catalog_candidates(owner: &str, repo: &str) -> Vec<String> {
+    let raw = format!("https://raw.githubusercontent.com/{owner}/{repo}/HEAD");
+    vec![
+        format!("{raw}/{REPO_FILE}"),
+        format!("https://{}.github.io/{repo}/catalog.json", owner.to_ascii_lowercase()),
+        format!("{raw}/catalog.json"),
+    ]
+}
+
+/// Problems with a CraftSpace-compatible repo's catalog (`craftspace-addons.json`), for its
+/// authors: the same rules the CraftSpace registry's own check applies. Empty means it's fine.
+pub fn check_catalog(text: &str, catalog: &crate::catalog::Catalog) -> Vec<String> {
+    let mut problems = Vec::new();
+    let reg: Registry = match serde_json::from_str(text) {
+        Ok(r) => r,
+        Err(err) => return vec![format!("not valid JSON for an add-on catalog: {err}")],
+    };
+    if reg.format != "craftspace-addons" || reg.version != 1 {
+        problems.push(r#"needs "format": "craftspace-addons" and "version": 1"#.to_string());
+    }
+    if reg.addons.is_empty() {
+        problems.push("lists no add-ons".into());
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    for a in &reg.addons {
+        let at = if a.id.is_empty() { "?" } else { a.id.as_str() };
+        let mut say = |m: String| problems.push(format!("{at}: {m}"));
+        let id_ok = a.id.chars().next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+            && a.id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '.');
+        if !id_ok {
+            say("the id is lower-case letters, digits, dots and dashes".into());
+        }
+        if !ids.insert(a.id.clone()) {
+            say("the id is used twice".into());
+        }
+        if a.name.trim().is_empty() || a.description.trim().is_empty() {
+            say("needs a name and a description".into());
+        }
+        if a.license.is_none() {
+            say("needs a license".into());
+        }
+        if a.files.is_empty() {
+            say("needs files to download".into());
+        }
+        for f in &a.files {
+            if !f.url.starts_with("https://") {
+                say(format!("{}: downloads must be https://", f.url));
+            }
+            let sha = f.sha256.as_deref().unwrap_or_default();
+            if !(sha.len() == 64 && sha.bytes().all(|b| b.is_ascii_hexdigit())) {
+                say(format!("{}: needs its SHA-256 (it's checked before installing)", f.url));
+            }
+        }
+        if a.install.is_empty() {
+            say("needs install steps (where its files go)".into());
+        }
+        for app in &a.apps {
+            if catalog.app(app).is_none() {
+                say(format!("unknown app {app}"));
+            }
+        }
+        for step in &a.install {
+            if catalog.app(&step.app).is_none() {
+                say(format!("install: unknown app {}", step.app));
+                continue;
+            }
+            let known = step.to == "library"
+                || (step.to == "plugins" && plugin_folder_app(&step.app))
+                || (["clap", "vst3", "au"].contains(&step.to.as_str()) && step.app == "soundcraft")
+                || step.to.strip_prefix("app:").is_some_and(|t| {
+                    let root = t.split('/').next().unwrap_or_default();
+                    !t.split('/').any(|part| part == "..")
+                        && crate::profiles::spec(&step.app).is_some_and(|s| s.roots.iter().any(|r| r.key == root))
+                });
+            if !known {
+                say(format!("install: {} can't take files at {}", step.app, step.to));
+            }
+        }
+    }
+    problems
+}
+
+/// Apps with a plug-in folder CraftSpace can install into.
+fn plugin_folder_app(app: &str) -> bool {
+    matches!(app, "photocraft" | "vectorcraft" | "effectcraft")
+}
+
+/// The name and description a catalog gives itself (both formats have `name` and
+/// `description` at the top).
+pub fn catalog_info(text: &str) -> (Option<String>, Option<String>) {
+    let value: Value = serde_json::from_str(text).unwrap_or(Value::Null);
+    let get = |k: &str| value.get(k).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(String::from);
+    (get("name"), get("description"))
 }
 
 /// A place with plug-ins CraftSpace lists but doesn't install.
@@ -487,11 +631,60 @@ mod tests {
     }
 
     #[test]
+    fn repository_addresses() {
+        let gh = |o: &str, r: &str| RepoAddress::GitHub { owner: o.into(), repo: r.into() };
+        assert_eq!(parse_repo_address("akkk09/artcraft-store").unwrap(), gh("akkk09", "artcraft-store"));
+        assert_eq!(
+            parse_repo_address(" https://github.com/akkk09/artcraft-store/ ").unwrap(),
+            gh("akkk09", "artcraft-store")
+        );
+        assert_eq!(parse_repo_address("github.com/a/b.git").unwrap(), gh("a", "b"));
+        assert_eq!(parse_repo_address("https://github.com/a/b/tree/main/x").unwrap(), gh("a", "b"));
+        assert_eq!(
+            parse_repo_address("https://example.org/catalog.json").unwrap(),
+            RepoAddress::Catalog("https://example.org/catalog.json".into())
+        );
+        for bad in ["", "justone", "a/..", "http://example.org/c.json", "a b/c"] {
+            assert!(parse_repo_address(bad).is_err(), "{bad}");
+        }
+        let c = repo_catalog_candidates("Akkk09", "artcraft-store");
+        assert_eq!(c[0], "https://raw.githubusercontent.com/Akkk09/artcraft-store/HEAD/craftspace-addons.json");
+        assert_eq!(c[1], "https://akkk09.github.io/artcraft-store/catalog.json");
+    }
+
+    #[test]
+    fn checking_a_repos_catalog() {
+        let catalog = crate::catalog::Catalog::builtin();
+        assert!(
+            check_catalog(BUILTIN_REGISTRY, &catalog).is_empty(),
+            "{:?}",
+            check_catalog(BUILTIN_REGISTRY, &catalog)
+        );
+        let bad = r#"{"format": "craftspace-addons", "version": 1, "addons": [{"id": "My Pack", "name": "x",
+            "description": "y", "license": "MIT", "apps": ["nope"],
+            "files": [{"url": "http://x/y.zip"}],
+            "install": [{"app": "wordcraft", "to": "plugins"}, {"app": "vectorcraft", "to": "app:config/../../etc"}]}]}"#;
+        let problems = check_catalog(bad, &catalog).join("\n");
+        for want in [
+            "lower-case",
+            "https://",
+            "SHA-256",
+            "unknown app nope",
+            "wordcraft can't take files at plugins",
+            "app:config/../../etc",
+        ] {
+            assert!(problems.contains(want), "{want} missing from:\n{problems}");
+        }
+        assert_eq!(catalog_info(r#"{"name": " Mine ", "description": ""}"#), (Some("Mine".into()), None));
+    }
+
+    #[test]
     fn artcraft_store_listings_become_unchecked_plugins() {
         let store = Store {
             id: "artcraft-store".into(),
             name: "ArtCraft Store".into(),
             url: "https://akkk09.github.io/artcraft-store/catalog.json".into(),
+            repo: Some("akkk09/artcraft-store".into()),
             homepage: Some("https://github.com/akkk09/artcraft-store".into()),
             description: String::new(),
         };

@@ -1,4 +1,4 @@
-# Prints the SHA-256 and contents of add-on downloads, for pinning them in catalog.json.
+# Prints the SHA-256 and contents of add-on downloads, for pinning them in addons/registry.json.
 name: Pin add-ons
 
 on:

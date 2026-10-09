@@ -4,18 +4,21 @@ The add-on registry CraftSpace reads: presets, palettes, LUTs, templates and plu
 ArtCraft apps. CraftSpace shows them under **Fonts & add-ons** and installs each one where its
 app finds it (`craftspace-cli addons list` / `install` from the command line).
 
-- [`registry.json`](registry.json): every add-on, the community stores CraftSpace also reads, and
+- [`registry.json`](registry.json): every add-on, the add-on repositories CraftSpace suggests, and
   other plug-in sources it lists.
 - [`packs/`](packs): CraftSpace's own packs, made by [`build.py`](build.py) (CC0).
 - [`validate.py`](validate.py): checks the registry; [`pin.py`](pin.py): prints a download's
   SHA-256.
+- Add-on repositories: other catalogs CraftSpace lists separately, such as the ArtCraft Store
+  ([below](#add-on-repositories)), and how to make your own
+  ([CraftSpace-compatible add-on repos](#craftspace-compatible-add-on-repos)).
 
 ## Checked and not checked
 
 | Badge | Means |
 |---|---|
 | **✔ Checked by CraftSpace** | Made by CraftSpace and reviewed here. Only CraftSpace's own packs. |
-| **⚠ Not checked for security** | Everything else: open-source plug-ins pinned in this registry, submissions, and every add-on from a community store. CraftSpace asks before installing one. |
+| **⚠ Not checked for security** | Everything else: open-source plug-ins pinned in this registry, submissions, and every add-on from an add-on repository. CraftSpace asks before installing one. |
 
 CraftSpace checks every download against the SHA-256 pinned here, so a file changed after it was
 listed won't install. A checksum says the file is the one that was listed, not that it's safe:
@@ -85,13 +88,67 @@ them in the app.
 Apps whose settings live elsewhere (portable copies, Flatpak) are handled: the folders are found
 the same way as for workspace profiles.
 
-## Community stores
+## Add-on repositories
 
-CraftSpace also reads other add-on catalogs, listed under `stores`. Their add-ons are always shown
-as not checked. Two formats work: this registry's, and the
-[ArtCraft Store](https://github.com/akkk09/artcraft-store)'s (`plugins` entries with `downloadUrl`,
-`releaseAsset` or `artifact`). People can add more stores in Settings › Add-on sources
-(`craftspace-cli addons sources add https://…/catalog.json`).
+Besides this registry, CraftSpace lists add-ons from **add-on repositories**, each shown on its own
+under **Fonts & add-ons › Repositories** with a link to it. Their add-ons are always shown as not
+checked. The [ArtCraft Store](https://github.com/akkk09/artcraft-store) is suggested (listed under
+`stores` in `registry.json`); anyone can add more, in the app (type `owner/repo` and click **Add
+repository**) or from the command line:
+
+```sh
+craftspace-cli addons repos add someone/their-addons     # or the https:// address of a catalog
+craftspace-cli addons repos                              # list; remove / enable / disable ID
+```
+
+For `owner/repo`, CraftSpace looks for a catalog in this order:
+
+1. `craftspace-addons.json` at the root of the repository's default branch (a CraftSpace-compatible
+   add-on repo, below);
+2. `catalog.json` on the repository's GitHub Pages site (`https://owner.github.io/repo/`), in the
+   ArtCraft Store's format (`plugins` entries with `downloadUrl`, `releaseAsset` or `artifact`);
+3. `catalog.json` at the root of the repository.
+
+## CraftSpace-compatible add-on repos
+
+A GitHub repository with a `craftspace-addons.json` at its root, in the same format as
+[`registry.json`](registry.json), plus a `name` and `description` for the repository:
+
+```json
+{
+  "format": "craftspace-addons",
+  "version": 1,
+  "name": "Sam's Swatches",
+  "description": "Palettes for VectorCraft and PhotoCraft.",
+  "addons": [
+    {
+      "id": "sams-palettes",
+      "name": "Sam's Palettes",
+      "kind": "pack",
+      "version": "1.0",
+      "author": "Sam",
+      "license": "CC0-1.0",
+      "description": "Twelve palettes.",
+      "apps": ["vectorcraft"],
+      "homepage": "https://github.com/sam/swatches",
+      "files": [{ "url": "https://github.com/sam/swatches/releases/download/v1.0/palettes-1.0.zip", "sha256": "…" }],
+      "install": [{ "app": "vectorcraft", "to": "app:config/Swatches", "files": ["*.gpl"] }]
+    }
+  ]
+}
+```
+
+Everything under [Submitting an add-on](#submitting-an-add-on) applies: permanent `https://`
+downloads with their SHA-256, and `install` steps from [the table above](#where-files-go-install).
+Check it before publishing:
+
+```sh
+craftspace-cli addons check craftspace-addons.json    # or: craftspace-cli addons check owner/repo
+```
+
+A repository can't mark its own add-ons as checked: CraftSpace shows everything from a
+repository as not checked for security and asks before installing it. CraftSpace re-reads the
+catalog when it refreshes, so a change you push reaches everyone who added the repository.
 
 ## CraftSpace's own packs
 

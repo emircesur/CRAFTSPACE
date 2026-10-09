@@ -122,6 +122,8 @@ pub enum Msg {
     PolicyProfiles(Vec<(String, Result<String, String>)>),
     /// Add-ons from the registry and stores (after fetching them).
     Addons(Vec<craftspace_core::addons::Addon>),
+    /// An add-on repository was added (its name), or why not.
+    AddonRepo(Result<String, String>),
     /// The organization's central policy changed (reopen the manager).
     PolicyChanged,
     ResetDone(String, Result<String, String>),
@@ -332,6 +334,16 @@ pub fn refresh_addons(bus: &Bus, manager: &Manager) {
         for (source, err) in manager.refresh_addons() {
             log::info!("couldn't refresh add-ons from {source}: {err:#}");
         }
+        bus.send(Msg::Addons(manager.available_addons()));
+    });
+}
+
+/// Add an add-on repository (`owner/repo` or a catalog's address), then show its add-ons.
+pub fn add_addon_repo(bus: &Bus, manager: &Manager, address: String) {
+    let manager = manager.clone();
+    bus.spawn("addon-repo", move |bus| {
+        let result = manager.add_addon_repo(&address).map(|s| s.name).map_err(|e| format!("{e:#}"));
+        bus.send(Msg::AddonRepo(result));
         bus.send(Msg::Addons(manager.available_addons()));
     });
 }

@@ -2027,7 +2027,16 @@ impl Manager {
             .addon_registry()
             .stores
             .into_iter()
-            .map(|s| {
+            .map(|mut s| {
+                // Registries from before `repo`: a GitHub homepage names it.
+                if s.repo.is_none() {
+                    s.repo = s.homepage.as_deref().and_then(|h| match addons::parse_repo_address(h) {
+                        Ok(addons::RepoAddress::GitHub { owner, repo }) if h.starts_with("https://github.com/") => {
+                            Some(format!("{owner}/{repo}"))
+                        }
+                        _ => None,
+                    });
+                }
                 let on = !settings.disabled.contains(&s.id);
                 (s, on)
             })
@@ -2039,6 +2048,114 @@ impl Manager {
             }
         }
         stores
+    }
+
+    /// Add an add-on repository: a GitHub repository (`owner/repo`, CraftSpace-compatible with a
+    /// `craftspace-addons.json`, or an ArtCraft Store-style `catalog.json`), or a catalog's
+    /// address. Its catalog is fetched now, so a wrong address fails here.
+    pub fn add_addon_repo(&self, input: &str) -> anyhow::Result<addons::Store> {
+        let fetch = |url: &str| -> anyhow::Result<String> {
+            let mut resp = self.inner.agent.get(url).call()?;
+            check_status(url, resp.status().as_u16())?;
+            Ok(resp.body_mut().with_config().limit(16 << 20).read_to_string()?)
+        };
+        let (candidates, repo, fallback_name) = match addons::parse_repo_address(input)? {
+            addons::RepoAddress::GitHub { owner, repo } => (
+                addons::repo_catalog_candidates(&owner, &repo),
+                Some(format!("{owner}/{repo}")),
+                format!("{owner}/{repo}"),
+            ),
+            addons::RepoAddress::Catalog(url) => {
+                let host = url.trim_start_matches("https://").split('/').next().unwrap_or("catalog").to_string();
+                (vec![url], None, host)
+            }
+        };
+        // The same repository already listed (the ArtCraft Store is suggested by the registry)
+        // keeps its id, so it isn't shown twice.
+        let same = |s: &addons::Store| {
+            repo.as_ref().is_some_and(|r| s.repo.as_ref().is_some_and(|x| x.eq_ignore_ascii_case(r)))
+                || candidates.first().is_some_and(|u| *u == s.url)
+        };
+        let id = self
+            .addon_stores()
+            .into_iter()
+            .find(|(s, _)| same(s))
+            .map(|(s, _)| s.id)
+            .unwrap_or_else(|| addons::slug(&fallback_name.to_ascii_lowercase().replace('/', "-")));
+        let mut tried = Vec::new();
+        for url in candidates {
+            let probe = addons::Store {
+                id: id.clone(),
+                name: fallback_name.clone(),
+                url: url.clone(),
+                repo: repo.clone(),
+                homepage: repo.as_ref().map(|r| format!("https://github.com/{r}")),
+                description: String::new(),
+            };
+            match fetch(&url).and_then(|text| addons::parse_store(&probe, &text).map(|_| text)) {
+                Ok(text) => {
+                    let (name, description) = addons::catalog_info(&text);
+                    let store = addons::Store {
+                        name: name.unwrap_or(fallback_name),
+                        description: description.unwrap_or_default(),
+                        ..probe
+                    };
+                    let dir = self.addons_cache();
+                    std::fs::create_dir_all(&dir)?;
+                    write_atomic(&dir.join(format!("store-{}.json", store.id)), text.as_bytes())?;
+                    let mut settings = self.settings();
+                    settings.addon_stores.custom.retain(|s| s.id != store.id);
+                    settings.addon_stores.disabled.retain(|s| *s != store.id);
+                    if !self.addon_registry().stores.iter().any(|s| s.id == store.id) {
+                        settings.addon_stores.custom.push(store.clone());
+                    }
+                    self.set_settings(settings)?;
+                    return Ok(store);
+                }
+                Err(err) => {
+                    let err = format!("{err:#}");
+                    tried.push(if err.contains(&url) { err } else { format!("{url}: {err}") });
+                }
+            }
+        }
+        anyhow::bail!(
+            "found no add-on catalog for {input}. A CraftSpace-compatible repo has {} at its root.\n  {}",
+            addons::REPO_FILE,
+            tried.join("\n  ")
+        )
+    }
+
+    /// Remove a repository added by hand, or turn off a suggested one.
+    pub fn remove_addon_repo(&self, id: &str) -> anyhow::Result<()> {
+        let mut settings = self.settings();
+        let before = settings.addon_stores.custom.len();
+        settings.addon_stores.custom.retain(|s| s.id != id);
+        if settings.addon_stores.custom.len() == before {
+            anyhow::ensure!(
+                self.addon_registry().stores.iter().any(|s| s.id == id),
+                "no add-on repository {id} (see `craftspace-cli addons repos`)"
+            );
+            if !settings.addon_stores.disabled.iter().any(|s| s == id) {
+                settings.addon_stores.disabled.push(id.to_string());
+            }
+        }
+        self.set_settings(settings)?;
+        let _ = std::fs::remove_file(self.addons_cache().join(format!("store-{id}.json")));
+        Ok(())
+    }
+
+    /// Turn a repository on or off.
+    pub fn set_addon_repo_enabled(&self, id: &str, on: bool) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.addon_stores().iter().any(|(s, _)| s.id == id),
+            "no add-on repository {id} (see `craftspace-cli addons repos`)"
+        );
+        let mut settings = self.settings();
+        settings.addon_stores.disabled.retain(|s| s != id);
+        if !on {
+            settings.addon_stores.disabled.push(id.to_string());
+        }
+        self.set_settings(settings)
     }
 
     /// Add-ons from the registry and the stores that are on (as last fetched).

@@ -349,19 +349,12 @@
       "id": "artcraft-store",
       "name": "ArtCraft Store",
       "url": "https://akkk09.github.io/artcraft-store/catalog.json",
+      "repo": "akkk09/artcraft-store",
       "homepage": "https://github.com/akkk09/artcraft-store",
       "description": "A community catalog of PhotoCraft plug-ins (sandboxed WebAssembly filters). Its files have no checksums, and CraftSpace hasn't reviewed them."
     }
   ],
   "repositories": [
-    {
-      "name": "ArtCraft Store",
-      "url": "https://github.com/akkk09/artcraft-store",
-      "apps": [
-        "photocraft"
-      ],
-      "description": "Community PhotoCraft plug-ins (WebAssembly filters)."
-    },
     {
       "name": "Airwindows Consolidated",
       "url": "https://github.com/baconpaul/airwin2rack",

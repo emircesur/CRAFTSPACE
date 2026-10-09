@@ -256,24 +256,28 @@ enum AddonAction {
     },
     /// Remove an add-on's files.
     Remove { ids: Vec<String> },
-    /// The add-on stores besides the CraftSpace registry.
-    Sources {
+    /// Add-on repositories besides the CraftSpace registry (the ArtCraft Store, ones you add).
+    #[command(alias = "sources")]
+    Repos {
         #[command(subcommand)]
         action: Option<StoreAction>,
     },
-    /// Other plug-in sources CraftSpace lists but hasn't checked.
-    Repositories,
+    /// Check a CraftSpace-compatible repo's catalog: a craftspace-addons.json file, or owner/repo.
+    Check { target: String },
+    /// Other plug-in sources CraftSpace lists but doesn't install from.
+    #[command(alias = "repositories")]
+    Elsewhere,
 }
 
 #[derive(Subcommand)]
 enum StoreAction {
     List,
-    /// Add a store: the address of its catalog (CraftSpace registry or ArtCraft Store format).
+    /// Add a repository: owner/repo on GitHub (CraftSpace-compatible repos have a
+    /// craftspace-addons.json at their root), or the https:// address of a catalog.
     Add {
-        url: String,
-        #[arg(long)]
-        name: Option<String>,
+        address: String,
     },
+    /// Remove a repository you added (suggested ones are turned off).
     Remove {
         id: String,
     },
@@ -1419,72 +1423,69 @@ fn addons_command(manager: &Manager, action: AddonAction) -> anyhow::Result<u32>
                 }
             }
         }
-        AddonAction::Sources { action } => match action.unwrap_or(StoreAction::List) {
+        AddonAction::Repos { action } => match action.unwrap_or(StoreAction::List) {
             StoreAction::List => {
-                println!("{:<24} {:<5} {}", "CraftSpace registry", "on", addons::REGISTRY_URL);
+                println!("CraftSpace registry  (on)\n  {}\n", addons::REGISTRY_URL);
                 for (store, on) in manager.addon_stores() {
                     println!(
-                        "{:<24} {:<5} {}  (id: {}, not checked by CraftSpace)",
+                        "{}  ({}, id: {}, not checked by CraftSpace)",
                         store.name,
                         if on { "on" } else { "off" },
-                        store.url,
                         store.id
                     );
-                }
-            }
-            StoreAction::Add { url, name } => {
-                anyhow::ensure!(url.starts_with("https://"), "a store's address must start with https://");
-                let host = url.trim_start_matches("https://").split('/').next().unwrap_or("store").to_string();
-                let name = name.unwrap_or(host);
-                let id = addons::slug(&name.to_ascii_lowercase());
-                let mut settings = manager.settings();
-                settings.addon_stores.custom.retain(|s| s.id != id);
-                settings.addon_stores.custom.push(addons::Store {
-                    id: id.clone(),
-                    name: name.clone(),
-                    url,
-                    homepage: None,
-                    description: String::new(),
-                });
-                manager.set_settings(settings)?;
-                for (store, err) in manager.refresh_addons() {
-                    if store == name {
-                        eprintln!("warning: {name}: {err:#}");
+                    if let Some(repo) = &store.repo {
+                        println!("  github.com/{repo}");
                     }
+                    println!("  {}", store.url);
+                    if !store.description.is_empty() {
+                        println!("  {}", store.description);
+                    }
+                    println!();
                 }
-                say!("Added {name} (id: {id}). Its add-ons are shown as not checked by CraftSpace.");
+                println!("Add one: craftspace-cli addons repos add owner/repo");
+            }
+            StoreAction::Add { address } => {
+                let store = manager.add_addon_repo(&address)?;
+                let count = manager.available_addons().iter().filter(|a| a.source == store.name).count();
+                say!("Added {} (id: {}): {count} add-on(s), shown as not checked by CraftSpace.", store.name, store.id);
             }
             StoreAction::Remove { id } => {
-                let mut settings = manager.settings();
-                let before = settings.addon_stores.custom.len();
-                settings.addon_stores.custom.retain(|s| s.id != id);
-                anyhow::ensure!(
-                    settings.addon_stores.custom.len() < before,
-                    "{id} isn't a store you added (use `disable` for suggested ones)"
-                );
-                manager.set_settings(settings)?;
+                manager.remove_addon_repo(&id)?;
                 say!("Removed {id}.");
             }
             StoreAction::Enable { id } => {
-                let mut settings = manager.settings();
-                settings.addon_stores.disabled.retain(|s| *s != id);
-                manager.set_settings(settings)?;
+                manager.set_addon_repo_enabled(&id, true)?;
                 say!("{id} is on.");
             }
             StoreAction::Disable { id } => {
-                anyhow::ensure!(
-                    manager.addon_stores().iter().any(|(s, _)| s.id == id),
-                    "no store {id} (see `craftspace-cli addons sources`)"
-                );
-                let mut settings = manager.settings();
-                if !settings.addon_stores.disabled.contains(&id) {
-                    settings.addon_stores.disabled.push(id.clone());
-                }
-                manager.set_settings(settings)?;
+                manager.set_addon_repo_enabled(&id, false)?;
                 say!("{id} is off.");
             }
         },
-        AddonAction::Repositories => {
+        AddonAction::Check { target } => {
+            let text = if Path::new(&target).is_file() {
+                std::fs::read_to_string(&target)?
+            } else {
+                let addons::RepoAddress::GitHub { owner, repo } = addons::parse_repo_address(&target)? else {
+                    anyhow::bail!("give a craftspace-addons.json file or owner/repo");
+                };
+                let url = addons::repo_catalog_candidates(&owner, &repo).remove(0);
+                let mut resp = manager.agent().get(&url).call().with_context(|| format!("couldn't fetch {url}"))?;
+                anyhow::ensure!(resp.status().is_success(), "{url} returned HTTP {}", resp.status().as_u16());
+                resp.body_mut().read_to_string()?
+            };
+            let problems = addons::check_catalog(&text, &manager.catalog());
+            if problems.is_empty() {
+                let reg = addons::parse_registry(&text, "check")?;
+                say!("Looks good: {} add-on(s) CraftSpace can install.", reg.addons.len());
+            } else {
+                for p in &problems {
+                    eprintln!("error: {p}");
+                }
+                anyhow::bail!("{} problem(s)", problems.len());
+            }
+        }
+        AddonAction::Elsewhere => {
             println!(
                 "Other plug-in sources. CraftSpace doesn't install from these and hasn't checked them for security:\n"
             );

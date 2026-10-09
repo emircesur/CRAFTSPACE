@@ -33,8 +33,10 @@ place to install them, keep them up to date, and get to your files.
   families (Japanese, Chinese, Arabic) for your user account, checksum-verified, so every app can
   use them. Add-ons (palettes, LUT looks, LightCraft presets, PhotoCraft plug-ins, SoundCraft
   audio plug-ins) install where each app finds them, from the
-  [CraftSpace add-on registry](addons/README.md) and community stores such as the
-  [ArtCraft Store](https://github.com/akkk09/artcraft-store). Only CraftSpace's own packs are
+  [CraftSpace add-on registry](addons/README.md) and, listed separately, add-on repositories
+  such as the [ArtCraft Store](https://github.com/akkk09/artcraft-store). Add any repository by
+  typing `owner/repo`; [anyone can make one](addons/README.md#craftspace-compatible-add-on-repos).
+  Only CraftSpace's own packs are
   marked **checked**; everything else says **not checked for security** and asks first.
   Anyone can [submit an add-on](addons/README.md#submitting-an-add-on).
 - **Workspace sync**: save an app's workspaces, layouts, keyboard shortcuts, preferences and
@@ -198,7 +200,7 @@ craftspace-cli file-types list | on [ext…] | off [ext…]
 craftspace-cli source list | enable | disable | check owner/repo | add owner/repo [--binary name]
 craftspace-cli source set photocraft someone/photocraft-fork   # or `official` to go back
 craftspace-cli addons list [--app photocraft] [--checked] | info ID | install ID [--yes] | remove ID
-craftspace-cli addons sources [add URL | remove ID | enable ID | disable ID] | repositories
+craftspace-cli addons repos [add owner/repo | remove ID | enable ID | disable ID] | check FILE
 craftspace-cli profile export photocraft [--parts layouts,shortcuts] [--out FILE]
 craftspace-cli profile import FILE [--parts …] | show FILE | parts APP | backups APP
 ```
