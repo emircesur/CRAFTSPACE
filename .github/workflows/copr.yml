@@ -1,0 +1,41 @@
+# Builds the released version in Fedora Copr, so Fedora users get CraftSpace updates through dnf:
+#   sudo dnf copr enable <owner>/craftspace && sudo dnf install craftspace
+#
+# One-time setup (see README › Fedora): create a Copr project named "craftspace", then add the
+# repository secrets COPR_LOGIN, COPR_USERNAME and COPR_TOKEN from
+# https://copr.fedorainfracloud.org/api/. Without them this workflow does nothing.
+name: Copr
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Tag or commit to build
+        required: true
+
+jobs:
+  copr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for credentials
+        id: creds
+        env:
+          COPR_TOKEN: ${{ secrets.COPR_TOKEN }}
+        run: |
+          if [ -n "$COPR_TOKEN" ]; then echo "ok=true" >> "$GITHUB_OUTPUT"; else echo "No COPR_TOKEN secret; skipping."; fi
+      - name: Submit the build
+        if: steps.creds.outputs.ok == 'true'
+        env:
+          COPR_LOGIN: ${{ secrets.COPR_LOGIN }}
+          COPR_USERNAME: ${{ secrets.COPR_USERNAME }}
+          COPR_TOKEN: ${{ secrets.COPR_TOKEN }}
+          REF: ${{ github.event.release.tag_name || inputs.ref }}
+        run: |
+          pip install copr-cli
+          mkdir -p ~/.config
+          printf '[copr-cli]\nlogin = %s\nusername = %s\ntoken = %s\ncopr_url = https://copr.fedorainfracloud.org\n' \
+            "$COPR_LOGIN" "$COPR_USERNAME" "$COPR_TOKEN" > ~/.config/copr
+          copr-cli buildscm --clone-url "https://github.com/${GITHUB_REPOSITORY}" --commit "$REF" \
+            --method make_srpm --spec packaging/fedora/craftspace.spec "$COPR_USERNAME/craftspace"

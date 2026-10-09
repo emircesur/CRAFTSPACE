@@ -1,0 +1,359 @@
+{
+  "schema": 1,
+  "revision": 2,
+  "apps": [
+    {
+      "id": "photocraft",
+      "name": "PhotoCraft",
+      "code": "Ph",
+      "repo": "storytold/photocraft",
+      "category": "photo",
+      "tagline": "Edit photos and layered PSD documents",
+      "description": "A native image editor that works the way Photoshop users expect: familiar menus, shortcuts, panels and tools, with layers, masks, adjustment layers, layer styles, type and brushes.",
+      "like": "Photoshop",
+      "colors": {
+        "bg": "#001E36",
+        "fg": "#31A8FF"
+      },
+      "extensions": [
+        "psd",
+        "psb",
+        "png",
+        "jpg",
+        "jpeg",
+        "tif",
+        "tiff",
+        "webp",
+        "gif",
+        "bmp",
+        "tga",
+        "exr",
+        "hdr",
+        "avif",
+        "qoi"
+      ],
+      "featured": true,
+      "icon": "https://raw.githubusercontent.com/storytold/photocraft/HEAD/assets/app-icon/hicolor/256x256/apps/ai.storyteller.photocraft.png",
+      "config_dir": "Photocraft"
+    },
+    {
+      "id": "lightcraft",
+      "name": "LightCraft",
+      "code": "Lt",
+      "repo": "storytold/lightcraft",
+      "category": "photo",
+      "tagline": "Organize and develop your photos",
+      "description": "A Lightroom-style photo library and raw developer: catalog, cull, develop and export your photos with non-destructive edits.",
+      "like": "Lightroom",
+      "colors": {
+        "bg": "#001D26",
+        "fg": "#3DDBD9"
+      },
+      "extensions": [
+        "dng",
+        "cr2",
+        "cr3",
+        "nef",
+        "arw",
+        "raf",
+        "orf",
+        "rw2",
+        "xmp"
+      ],
+      "icon": "https://raw.githubusercontent.com/storytold/lightcraft/HEAD/assets/app-icon/hicolor/256x256/apps/ai.storyteller.lightcraft.png"
+    },
+    {
+      "id": "vectorcraft",
+      "name": "VectorCraft",
+      "code": "Vc",
+      "repo": "storytold/vectorcraft",
+      "category": "illustration",
+      "tagline": "Create illustrations and vector graphics",
+      "description": "An Illustrator-style vector editor with pen and shape tools, artboards, gradients, type and SVG/AI interchange.",
+      "like": "Illustrator",
+      "colors": {
+        "bg": "#330000",
+        "fg": "#FF9A00"
+      },
+      "extensions": [
+        "ai",
+        "svg",
+        "svgz",
+        "eps"
+      ],
+      "icon": "https://raw.githubusercontent.com/storytold/vectorcraft/HEAD/assets/app-icon/hicolor/256x256/apps/ai.storyteller.vectorcraft.png"
+    },
+    {
+      "id": "designcraft",
+      "name": "DesignCraft",
+      "code": "Dc",
+      "repo": "storytold/designcraft",
+      "category": "design",
+      "tagline": "Design and publish page layouts",
+      "description": "An InDesign-style page layout and publishing app with IDML import and export.",
+      "like": "InDesign",
+      "colors": {
+        "bg": "#49021F",
+        "fg": "#FF3366"
+      },
+      "extensions": [
+        "idml",
+        "indd"
+      ],
+      "icon": "https://raw.githubusercontent.com/storytold/designcraft/HEAD/assets/app-icon/hicolor/256x256/apps/ai.storyteller.designcraft.png"
+    },
+    {
+      "id": "pdfcraft",
+      "name": "PdfCraft",
+      "code": "Pd",
+      "repo": "storytold/pdfcraft",
+      "category": "documents",
+      "tagline": "View, edit, sign and organize PDFs",
+      "description": "An Acrobat-style PDF tool to read, annotate, fill, sign, combine and organize PDF documents.",
+      "like": "Acrobat",
+      "colors": {
+        "bg": "#3A0505",
+        "fg": "#FF4F4F"
+      },
+      "extensions": [
+        "pdf"
+      ],
+      "icon": "https://raw.githubusercontent.com/storytold/pdfcraft/HEAD/assets/app-icon/hicolor/256x256/apps/ai.storyteller.pdfcraft.png"
+    },
+    {
+      "id": "filmcraft",
+      "name": "FilmCraft",
+      "code": "Fm",
+      "repo": "storytold/filmcraft",
+      "category": "video",
+      "tagline": "Edit and craft polished films and video",
+      "description": "A Premiere Pro-style timeline video editor: cut, trim, mix audio, grade color and export.",
+      "like": "Premiere Pro",
+      "colors": {
+        "bg": "#00005B",
+        "fg": "#9999FF"
+      },
+      "extensions": [
+        "prproj",
+        "mp4",
+        "mov",
+        "mkv",
+        "webm"
+      ],
+      "icon": "https://raw.githubusercontent.com/storytold/filmcraft/HEAD/assets/app-icon/hicolor/256x256/apps/ai.storyteller.filmcraft.png"
+    },
+    {
+      "id": "effectcraft",
+      "name": "EffectCraft",
+      "code": "Ef",
+      "repo": "storytold/effectcraft",
+      "category": "video",
+      "tagline": "Motion graphics and visual effects",
+      "description": "An After Effects-style compositing and motion graphics app with keyframes, effects, Lottie import/export and render queues.",
+      "like": "After Effects",
+      "colors": {
+        "bg": "#1F0040",
+        "fg": "#CF96FD"
+      },
+      "extensions": [
+        "ecproj",
+        "lottie"
+      ],
+      "icon": "https://raw.githubusercontent.com/storytold/effectcraft/HEAD/assets/app-icon/hicolor/256x256/apps/ai.storyteller.effectcraft.png"
+    },
+    {
+      "id": "soundcraft",
+      "name": "SoundCraft",
+      "code": "Sd",
+      "repo": "storytold/soundcraft",
+      "category": "audio",
+      "tagline": "Record, edit and mix audio",
+      "description": "A Pro Tools-style digital audio workstation for recording, editing and mixing multitrack audio.",
+      "like": "Pro Tools",
+      "colors": {
+        "bg": "#002A26",
+        "fg": "#00E4BB"
+      },
+      "extensions": [
+        "ptx",
+        "wav",
+        "aif",
+        "aiff",
+        "flac",
+        "mp3",
+        "ogg"
+      ],
+      "icon": "https://raw.githubusercontent.com/storytold/soundcraft/HEAD/assets/app-icon/hicolor/256x256/apps/ai.storyteller.soundcraft.png"
+    },
+    {
+      "id": "wordcraft",
+      "name": "WordCraft",
+      "code": "Wd",
+      "repo": "storytold/wordcraft",
+      "category": "documents",
+      "tagline": "Write and format documents",
+      "description": "A Word-style word processor with styles, tables, track changes and DOCX compatibility.",
+      "like": "Word",
+      "colors": {
+        "bg": "#0B2A5C",
+        "fg": "#5BA8FF"
+      },
+      "extensions": [
+        "docx",
+        "doc",
+        "odt",
+        "rtf"
+      ],
+      "icon": "https://raw.githubusercontent.com/storytold/wordcraft/HEAD/assets/app-icon/hicolor/256x256/apps/ai.storyteller.wordcraft.png"
+    },
+    {
+      "id": "deckcraft",
+      "name": "DeckCraft",
+      "code": "Dk",
+      "repo": "storytold/deckcraft",
+      "category": "documents",
+      "tagline": "Build and present slide decks",
+      "description": "A PowerPoint-style presentation app with layouts, themes, animations and PPTX compatibility.",
+      "like": "PowerPoint",
+      "colors": {
+        "bg": "#3A1306",
+        "fg": "#FF8F6B"
+      },
+      "extensions": [
+        "pptx",
+        "ppt",
+        "odp"
+      ],
+      "icon": "https://raw.githubusercontent.com/storytold/deckcraft/HEAD/assets/app-icon/hicolor/256x256/apps/ai.storyteller.deckcraft.png"
+    },
+    {
+      "id": "gridcraft",
+      "name": "GridCraft",
+      "code": "Gd",
+      "repo": "storytold/gridcraft",
+      "category": "documents",
+      "tagline": "Crunch numbers in spreadsheets",
+      "description": "An Excel-style spreadsheet with formulas, charts, pivot tables and XLSX compatibility.",
+      "like": "Excel",
+      "colors": {
+        "bg": "#0A3018",
+        "fg": "#3FD17A"
+      },
+      "extensions": [
+        "xlsx",
+        "xls",
+        "csv",
+        "ods"
+      ],
+      "icon": "https://raw.githubusercontent.com/storytold/gridcraft/HEAD/assets/app-icon/hicolor/256x256/apps/ai.storyteller.gridcraft.png"
+    },
+    {
+      "id": "cadcraft",
+      "name": "CADCraft",
+      "code": "Cd",
+      "repo": "storytold/cadcraft",
+      "category": "cad",
+      "tagline": "Computer-aided design and drafting",
+      "description": "An AutoCAD-style 2D drafting and design app with layers, blocks, dimensions and DXF/DWG interchange.",
+      "like": "AutoCAD",
+      "colors": {
+        "bg": "#2E2100",
+        "fg": "#FFC24D"
+      },
+      "extensions": [
+        "dwg",
+        "dxf"
+      ],
+      "icon": "https://raw.githubusercontent.com/storytold/cadcraft/HEAD/assets/app-icon/hicolor/256x256/apps/ai.storyteller.cadcraft.png"
+    },
+    {
+      "id": "artcraft",
+      "name": "ArtCraft",
+      "code": "Ac",
+      "repo": "storytold/artcraft",
+      "category": "ai",
+      "tagline": "The crafting engine for AI images and video",
+      "description": "An intentional crafting engine for artists, designers and filmmakers: AI image and video creation with 2D and 3D scene tools.",
+      "colors": {
+        "bg": "#1C0B33",
+        "fg": "#B57BFF"
+      },
+      "homepage": "https://getartcraft.com",
+      "extensions": [],
+      "icon": "https://raw.githubusercontent.com/storytold/artcraft/HEAD/crates/desktop/artcraft/icons/128x128@2x.png",
+      "windows_installer": "exe"
+    }
+  ],
+  "categories": [
+    {
+      "id": "photo",
+      "name": "Photo"
+    },
+    {
+      "id": "design",
+      "name": "Graphic design"
+    },
+    {
+      "id": "illustration",
+      "name": "Illustration"
+    },
+    {
+      "id": "video",
+      "name": "Video and motion"
+    },
+    {
+      "id": "audio",
+      "name": "Audio"
+    },
+    {
+      "id": "documents",
+      "name": "Documents and PDF"
+    },
+    {
+      "id": "cad",
+      "name": "3D and CAD"
+    },
+    {
+      "id": "ai",
+      "name": "AI creation"
+    }
+  ],
+  "links": [
+    {
+      "title": "Tutorials",
+      "url": "https://getartcraft.com/tutorials"
+    },
+    {
+      "title": "News",
+      "url": "https://getartcraft.com/news"
+    },
+    {
+      "title": "ArtCraft website",
+      "url": "https://getartcraft.com"
+    },
+    {
+      "title": "Community Discord",
+      "url": "https://discord.gg/artcraft"
+    },
+    {
+      "title": "Source on GitHub",
+      "url": "https://github.com/storytold"
+    },
+    {
+      "title": "Support",
+      "url": "https://getartcraft.com/support"
+    }
+  ],
+  "news_site": "https://getartcraft.com",
+  "addons": [
+    {
+      "id": "craft-fonts",
+      "name": "Craft Fonts",
+      "kind": "fonts",
+      "description": "Japanese, Chinese and Arabic fonts the ArtCraft apps are designed with: BIZ UDPGothic, BIZ UDMincho, Shippori Mincho, Noto Sans CJK SC and Noto Sans Arabic. All under the SIL Open Font License.",
+      "source": "https://raw.githubusercontent.com/storytold/craft-fonts/HEAD/fonts/manifest.txt",
+      "base_url": "https://raw.githubusercontent.com/storytold/craft-fonts/HEAD/",
+      "homepage": "https://github.com/storytold/craft-fonts"
+    }
+  ]
+}

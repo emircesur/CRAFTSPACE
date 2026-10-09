@@ -1,0 +1,244 @@
+# Builds CraftSpace for Windows, macOS and Linux. On a `v*` tag the archives are published with
+# the same naming scheme as the ArtCraft apps (plus SHA256SUMS.txt), which is how CraftSpace finds
+# its own updates. Running it by hand (workflow_dispatch) builds and smoke-tests; with a `tag`
+# input it also publishes that release, creating the tag on the commit it built.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Publish as this release (e.g. v0.1.0); leave empty to only build
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - platform: windows-arm64
+            os: windows-latest
+            target: aarch64-pc-windows-msvc
+          - platform: linux-x86_64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - platform: linux-aarch64
+            os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} -p craftspace -p craftspace-cli
+      - name: Version
+        id: version
+        shell: bash
+        run: echo "version=$(cargo pkgid -p craftspace | sed 's/.*[#@]//')" >> "$GITHUB_OUTPUT"
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "craftspace-${{ steps.version.outputs.version }}-${{ matrix.platform }}-portable"
+          New-Item -ItemType Directory -Path "dist/$name" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/craftspace.exe", "target/${{ matrix.target }}/release/craftspace-cli.exe", README.md, LICENSE-MIT, LICENSE-APACHE "dist/$name/"
+          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
+      - name: Smoke test (Windows x64)
+        if: matrix.platform == 'windows-x64'
+        shell: pwsh
+        run: |
+          & "target/${{ matrix.target }}/release/craftspace-cli.exe" --version
+          & "target/${{ matrix.target }}/release/craftspace-cli.exe" paths
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          name="craftspace-${{ steps.version.outputs.version }}-${{ matrix.platform }}"
+          root="dist/$name"
+          install -Dm755 "target/${{ matrix.target }}/release/craftspace" "$root/bin/craftspace"
+          install -Dm755 "target/${{ matrix.target }}/release/craftspace-cli" "$root/bin/craftspace-cli"
+          install -Dm644 packaging/linux/craftspace.desktop "$root/share/applications/craftspace.desktop"
+          install -Dm644 assets/craftspace-256.png "$root/share/icons/hicolor/256x256/apps/craftspace.png"
+          install -Dm644 README.md "$root/share/doc/craftspace/README.md"
+          install -Dm644 LICENSE-MIT "$root/share/doc/craftspace/LICENSE-MIT"
+          install -Dm644 LICENSE-APACHE "$root/share/doc/craftspace/LICENSE-APACHE"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          "$root/bin/craftspace-cli" --version
+      - name: Debian package
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cargo install cargo-deb --locked
+          cargo deb -p craftspace --no-build --target ${{ matrix.target }} --output "dist/craftspace-${{ steps.version.outputs.version }}-${{ matrix.platform }}.deb"
+          dpkg-deb --info dist/*.deb | head -20
+          sudo apt-get install -y ./dist/*.deb && craftspace-cli --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*.deb
+
+  # RPMs, built the way Copr builds them (vendored crates, offline), on Fedora.
+  rpm:
+    name: rpm-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            os: ubuntu-latest
+          - arch: aarch64
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    container: fedora:latest
+    steps:
+      - run: dnf -y install git make rpm-build cargo rust gcc desktop-file-utils libappstream-glib findutils tar gzip
+      - uses: actions/checkout@v4
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: make -f .copr/Makefile srpm outdir="$PWD/out"
+      - run: rpmbuild --rebuild --define "_rpmdir $PWD/out" out/craftspace-*.src.rpm
+      - name: Name it like the other packages
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          mkdir -p dist
+          cp out/${{ matrix.arch }}/craftspace-$version-*.rpm "dist/craftspace-$version-linux-${{ matrix.arch }}.rpm"
+          dnf -y install dist/*.rpm && craftspace-cli --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm-${{ matrix.arch }}
+          path: dist/*.rpm
+
+  macos:
+    name: macos-universal
+    runs-on: macos-latest
+    env:
+      # Optional. With these secrets set, the app is signed with a Developer ID and notarized,
+      # so Gatekeeper opens it without a warning; without them it gets an ad-hoc signature.
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}            # base64 of the .p12
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}  # "Developer ID Application: … (TEAMID)"
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}          # app-specific password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Build both architectures
+        run: |
+          for t in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --release --locked --target $t -p craftspace -p craftspace-cli
+          done
+      - name: Import the Developer ID certificate
+        if: env.APPLE_CERTIFICATE != ''
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p ci "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p ci "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci "$keychain"
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+      - name: Bundle CraftSpace.app and the disk image
+        run: |
+          version=$(cargo pkgid -p craftspace | sed 's/.*[#@]//')
+          app=dist/CraftSpace.app
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          for bin in craftspace craftspace-cli; do
+            lipo -create -output "$app/Contents/MacOS/$bin" \
+              target/aarch64-apple-darwin/release/$bin target/x86_64-apple-darwin/release/$bin
+          done
+          sed "s/@VERSION@/$version/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
+          iconset=dist/craftspace.iconset
+          mkdir -p "$iconset"
+          for s in 16 32 128 256 512; do
+            sips -z $s $s assets/craftspace.png --out "$iconset/icon_${s}x${s}.png" >/dev/null
+            d=$((s * 2)); [ $d -le 512 ] && sips -z $d $d assets/craftspace.png --out "$iconset/icon_${s}x${s}@2x.png" >/dev/null
+          done
+          iconutil -c icns "$iconset" -o "$app/Contents/Resources/craftspace.icns"
+          dmg="dist/craftspace-$version-macos-universal.dmg"
+          if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            # Developer ID with the hardened runtime, as notarization requires.
+            for bin in craftspace-cli craftspace; do
+              codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$app/Contents/MacOS/$bin"
+            done
+            codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$app"
+          else
+            # Ad-hoc signature so Apple silicon runs it; not notarized.
+            codesign --force --deep --sign - "$app"
+          fi
+          codesign --verify --strict --verbose=2 "$app"
+          mkdir -p dist/dmg && cp -R "$app" dist/dmg/ && ln -s /Applications dist/dmg/Applications
+          hdiutil create -volname CraftSpace -srcfolder dist/dmg -ov -format UDZO "$dmg"
+          if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$dmg"
+          fi
+          "$app/Contents/MacOS/craftspace-cli" --version
+          lipo -info "$app/Contents/MacOS/craftspace"
+      - name: Notarize
+        if: env.APPLE_SIGNING_IDENTITY != '' && env.APPLE_ID != ''
+        run: |
+          version=$(cargo pkgid -p craftspace | sed 's/.*[#@]//')
+          dmg="dist/craftspace-$version-macos-universal.dmg"
+          xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple "$dmg"
+          spctl --assess --type open --context context:primary-signature --verbose "$dmg"
+      - name: Smoke test the disk image with CraftSpace's own installer
+        run: |
+          version=$(cargo pkgid -p craftspace | sed 's/.*[#@]//')
+          cargo build -p craftspace-cli
+          mkdir -p "$RUNNER_TEMP/mnt"
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/mnt" "dist/craftspace-$version-macos-universal.dmg"
+          ls "$RUNNER_TEMP/mnt"
+          "$RUNNER_TEMP/mnt/CraftSpace.app/Contents/MacOS/craftspace-cli" --version
+          hdiutil detach "$RUNNER_TEMP/mnt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: dist/*.dmg
+
+  publish:
+    needs: [build, rpm, macos]
+    runs-on: ubuntu-latest
+    # Publish whatever built, even if one platform failed.
+    if: ${{ !cancelled() && (startsWith(github.ref, 'refs/tags/') || inputs.tag != '') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}

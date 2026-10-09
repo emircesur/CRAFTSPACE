@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=CraftSpace
+GenericName=App Manager
+Comment=Install and update the open-source ArtCraft creative apps
+Exec=craftspace
+TryExec=craftspace
+Icon=craftspace
+Terminal=false
+StartupNotify=true
+StartupWMClass=craftspace
+Categories=Graphics;Utility;PackageManager;
+Keywords=artcraft;photocraft;install;update;apps;

@@ -1,0 +1,23 @@
+[package]
+name = "craftspace-cli"
+description = "Command-line installer and updater for ArtCraft apps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "craftspace-cli"
+path = "src/main.rs"
+
+[dependencies]
+craftspace-core.workspace = true
+anyhow.workspace = true
+semver.workspace = true
+log.workspace = true
+clap = { version = "4", features = ["derive"] }
+serde_json.workspace = true
+open = "5"
+env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }

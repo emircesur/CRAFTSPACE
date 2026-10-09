@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.emircesur.craftspace</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <name>CraftSpace</name>
+  <summary>Install and update the open-source ArtCraft creative apps</summary>
+  <description>
+    <p>
+      CraftSpace is an independent installer and update manager for the ArtCraft apps
+      (PhotoCraft, LightCraft, VectorCraft, FilmCraft, GridCraft and more): one place to
+      install them, keep them up to date and get to your files.
+    </p>
+    <ul>
+      <li>Installs per user, or as system packages through dnf or apt</li>
+      <li>Checksum-verified downloads that resume, with update channels and rollback</li>
+      <li>Recent files, news, tutorials, fonts and a command line for scripts</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">craftspace.desktop</launchable>
+  <url type="homepage">https://github.com/emircesur/craftspace</url>
+  <url type="bugtracker">https://github.com/emircesur/craftspace/issues</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>All the ArtCraft apps in one place</caption>
+      <image>https://raw.githubusercontent.com/emircesur/craftspace/HEAD/docs/screenshots/apps.png</image>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-10-09"/>
+  </releases>
+</component>

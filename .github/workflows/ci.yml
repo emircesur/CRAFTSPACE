@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  # Real installs from the storytold releases, on each platform.
+  e2e:
+    name: End to end (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      # Read-only access to public releases, so the API isn't rate limited.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p craftspace -p craftspace-cli
+      - name: Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y fontconfig && ci/e2e-linux.sh
+      - name: macOS
+        if: runner.os == 'macOS'
+        run: ci/e2e-macos.sh
+      - name: Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ci/e2e-windows.ps1
+
+  # Fedora: build the RPM the way Copr does (make srpm, then an offline rpmbuild), install it
+  # with dnf, and let it install ArtCraft apps as RPMs.
+  fedora:
+    name: Fedora (RPM)
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - run: dnf -y install git make rpm-build cargo rust gcc desktop-file-utils libappstream-glib python3 findutils tar gzip
+      - uses: actions/checkout@v4
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Source RPM (as Copr makes it)
+        run: make -f .copr/Makefile srpm outdir="$PWD/out"
+      - name: Binary RPM
+        run: rpmbuild --rebuild --define "_rpmdir $PWD/out" out/craftspace-*.src.rpm
+      - name: Install with dnf
+        run: dnf -y install out/*/craftspace-*.rpm
+      - name: Install ArtCraft apps as RPMs
+        run: ci/e2e-fedora.sh
+
+  # Open the real window on each desktop: tray icon, a test notification, close to the tray.
+  gui:
+    name: GUI smoke (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p craftspace
+      - name: Linux (Xvfb, xfce4-panel tray, dunst notifications)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-x11-0 xvfb xfce4-panel dunst dbus-x11 xdotool imagemagick
+          ci/gui-smoke-linux.sh
+      - name: macOS
+        if: runner.os == 'macOS'
+        run: ci/gui-smoke-macos.sh
+      - name: Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ci/gui-smoke-windows.ps1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gui-${{ runner.os }}
+          path: gui-screenshots

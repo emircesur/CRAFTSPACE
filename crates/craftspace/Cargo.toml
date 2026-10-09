@@ -1,0 +1,57 @@
+[package]
+name = "craftspace"
+description = "Installer and update manager for the open-source ArtCraft creative apps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+craftspace-core.workspace = true
+anyhow.workspace = true
+semver.workspace = true
+log.workspace = true
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+egui_commonmark = "0.25"
+rfd = "0.15"
+open = "5"
+env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+serde_json.workspace = true
+notify-rust = "4"
+notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
+
+# Windows: Direct3D through wgpu when OpenGL 2 isn't available (no GPU driver, VMs, Remote
+# Desktop).
+[target.'cfg(windows)'.dependencies]
+eframe = { version = "0.36", default-features = false, features = ["wgpu"] }
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+tray-icon = "0.26"
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+ksni = { version = "0.3", default-features = false, features = ["async-io", "blocking"] }
+
+[build-dependencies]
+winresource = "0.1"
+
+# `cargo deb -p craftspace` (release workflow).
+[package.metadata.deb]
+name = "craftspace"
+maintainer = "CraftSpace contributors"
+copyright = "CraftSpace contributors"
+extended-description = "Installs and updates the open-source ArtCraft creative apps: checksum-verified downloads, update channels and rollback, recent files, news and tutorials."
+section = "utils"
+# The window system libraries are loaded at run time, so they aren't found automatically.
+depends = "libgl1, libegl1, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libx11-xcb1, libxcursor1, libxrandr2, libxi6, libwayland-client0"
+recommends = "policykit-1 | pkexec, fontconfig"
+assets = [
+    ["target/release/craftspace", "usr/bin/", "755"],
+    ["target/release/craftspace-cli", "usr/bin/", "755"],
+    ["../../packaging/linux/craftspace.desktop", "usr/share/applications/", "644"],
+    ["../../assets/craftspace-256.png", "usr/share/icons/hicolor/256x256/apps/craftspace.png", "644"],
+    ["../../packaging/linux/io.github.emircesur.craftspace.metainfo.xml", "usr/share/metainfo/", "644"],
+    ["../../README.md", "usr/share/doc/craftspace/README.md", "644"],
+]
