@@ -24,6 +24,9 @@ pub struct Request<'a> {
     /// A command that uninstalls the app (`[exe, args...]`), for the system's app list.
     pub uninstall_command: Option<Vec<String>>,
     pub size_bytes: u64,
+    /// macOS: where the bundle goes, when not `~/Applications` (an app found in /Applications is
+    /// updated there).
+    pub applications: Option<&'a Path>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -46,7 +49,8 @@ pub fn integrate(req: &Request) -> anyhow::Result<Integration> {
     #[cfg(target_os = "macos")]
     {
         let backup = req.dir.parent().unwrap_or(req.dir).join("replaced");
-        let active = macos::activate(req.executable, &macos::applications_dir(), &backup)?;
+        let applications = req.applications.map(Path::to_path_buf).unwrap_or_else(macos::applications_dir);
+        let active = macos::activate(req.executable, &applications, &backup)?;
         return Ok(Integration { files: vec![active.clone()], registry_keys: Vec::new(), executable: Some(active) });
     }
     #[allow(unreachable_code)]

@@ -246,6 +246,7 @@ mod tests {
             desktop_shortcut: false,
             uninstall_command: None,
             size_bytes: 0,
+            applications: None,
         }
     }
 

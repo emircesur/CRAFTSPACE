@@ -96,6 +96,8 @@ pub enum Action {
     Cleanup,
     TestNotification,
     OpenAbout,
+    /// Start the updated CraftSpace and quit this one.
+    RestartCraftSpace,
     /// The answer to "portable or installer?" (true: installer).
     SetInstallMode(bool),
     /// Save the Files features (from the first-run card or the Files window).
@@ -187,6 +189,8 @@ pub struct CraftSpaceApp {
     pub last_check: Option<Instant>,
     pub self_update: Option<SelfUpdate>,
     pub self_updating: bool,
+    /// A newer CraftSpace is in place; it runs from the next start.
+    pub self_update_ready: Option<semver::Version>,
     required_queued: bool,
 
     pub files: FilesState,
@@ -268,6 +272,7 @@ impl CraftSpaceApp {
             last_check: None,
             self_update: None,
             self_updating: false,
+            self_update_ready: None,
             required_queued: false,
             files: FilesState {
                 entries: Vec::new(),
@@ -575,7 +580,36 @@ impl CraftSpaceApp {
                     Err(err) => self
                         .toast(ToastKind::Error, format!("Couldn't import {}'s settings: {err}", self.app_name(&id))),
                 },
-                Msg::SelfUpdateFound(found) => self.self_update = found.map(|b| *b),
+                Msg::SelfUpdateFound(found) => {
+                    let found = found.map(|b| *b).filter(|u| self.self_update_ready.as_ref() != Some(&u.version));
+                    self.self_update = found;
+                    // Updating CraftSpace itself: in the background, used from the next start.
+                    if self.settings.auto_update_self && !self.self_updating {
+                        if let Some(update) = self.self_update.clone() {
+                            log::info!("updating CraftSpace to {} in the background", update.version);
+                            self.self_updating = true;
+                            worker::apply_self_update(&self.bus, &self.manager, update);
+                        }
+                    }
+                }
+                Msg::Adopted(found) => {
+                    reload = true;
+                    let names: Vec<String> = found
+                        .iter()
+                        .map(|(name, v)| match v {
+                            Some(v) => format!("{name} {v}"),
+                            None => name.clone(),
+                        })
+                        .collect();
+                    self.announce(
+                        ctx,
+                        ToastKind::Info,
+                        format!(
+                            "Found {} on this computer; CraftSpace keeps it up to date where it is",
+                            names.join(", ")
+                        ),
+                    );
+                }
                 Msg::TestNotification(result) => match result {
                     Ok(()) => self.toast(ToastKind::Success, "Sent a test notification"),
                     Err(err) => {
@@ -585,9 +619,19 @@ impl CraftSpaceApp {
                 Msg::SelfUpdateDone(result) => {
                     self.self_updating = false;
                     match result {
-                        Ok(text) => {
-                            self.self_update = None;
-                            self.toast(ToastKind::Success, text);
+                        Ok(_) => {
+                            let version = self.self_update.take().map(|u| u.version);
+                            self.self_update_ready.clone_from(&version);
+                            // Hidden in the tray with nothing running: switch over right away.
+                            if self.hidden && self.jobs.is_empty() {
+                                self.actions.push(Action::RestartCraftSpace);
+                            } else if let Some(v) = version {
+                                self.announce(
+                                    ctx,
+                                    ToastKind::Success,
+                                    format!("CraftSpace {v} is installed and starts next time (or restart it now from the sidebar)"),
+                                );
+                            }
                         }
                         Err(text) => self.toast(ToastKind::Error, format!("CraftSpace update failed: {text}")),
                     }
@@ -1014,6 +1058,20 @@ impl CraftSpaceApp {
                 }
                 Action::TestNotification => worker::test_notification(&self.bus),
                 Action::OpenAbout => self.about_open = true,
+                Action::RestartCraftSpace => {
+                    let mut cmd = std::process::Command::new(launcher_path(&self.manager));
+                    if self.hidden {
+                        cmd.arg(craftspace_core::autostart::BACKGROUND_FLAG);
+                    }
+                    match cmd.spawn() {
+                        Ok(_) => {
+                            self.quitting = true;
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                        Err(err) => self.toast(ToastKind::Error, format!("Couldn't restart CraftSpace: {err}")),
+                    }
+                }
                 Action::SetInstallMode(installer) => {
                     let mut s = self.settings.clone();
                     s.prefer_system_installer = installer;

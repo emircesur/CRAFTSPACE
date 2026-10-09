@@ -49,6 +49,9 @@ pub struct InstalledVersion {
     /// For `.rpm` / `.deb` installs: the package's name in the system package manager.
     #[serde(default)]
     pub system_package: Option<String>,
+    /// Installed without CraftSpace and adopted (see [`crate::detect`]).
+    #[serde(default)]
+    pub external: Option<crate::detect::External>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

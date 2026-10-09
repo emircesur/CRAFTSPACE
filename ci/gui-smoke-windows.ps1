@@ -42,7 +42,7 @@ for ($i = 0; $i -lt 40 -and -not $p; $i++) { Start-Sleep 1; $p = Main-Window }
 if (-not $p) { Fail "the window didn't appear" }
 $hwnd = $p.MainWindowHandle
 Get-Process craftspace -ErrorAction SilentlyContinue | Format-Table Id, MainWindowHandle, MainWindowTitle | Out-String | Write-Host
-if (Logged 'restarting with Direct3D') { Write-Host 'renderer: fell back to Direct3D (no OpenGL 2 here)' }
+if (Logged 'restarting with wgpu') { Write-Host 'renderer: fell back to Direct3D (no OpenGL 2 here)' }
 Start-Sleep 8
 Shot 'windows-window.png'
 

@@ -23,12 +23,10 @@ serde_json.workspace = true
 notify-rust = "4"
 notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
 
-# Windows: Direct3D through wgpu when OpenGL 2 isn't available (no GPU driver, VMs, Remote
-# Desktop).
-[target.'cfg(windows)'.dependencies]
-eframe = { version = "0.36", default-features = false, features = ["wgpu"] }
-
+# wgpu: Direct3D on Windows when OpenGL 2 isn't available (no GPU driver, VMs, Remote Desktop),
+# and Metal on macOS, where OpenGL is deprecated and doesn't keep up with 120 Hz displays.
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+eframe = { version = "0.36", default-features = false, features = ["wgpu"] }
 tray-icon = "0.26"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]

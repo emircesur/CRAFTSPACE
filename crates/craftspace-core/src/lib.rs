@@ -7,6 +7,7 @@
 pub mod app_data;
 pub mod archive;
 pub mod catalog;
+pub mod detect;
 pub mod download;
 pub mod file_types;
 pub mod files;

@@ -26,6 +26,20 @@ test "$(plist_version "$(installed photocraft executable)")" = "0.3.0" || plist_
 "$cli" uninstall photocraft --yes
 test -z "$(ls "$CRAFTSPACE_MAC_APPLICATIONS" | grep PhotoCraft || true)"
 
+# An app CraftSpace didn't install (here: one a different CraftSpace data folder installed) is
+# found, and updated where it is instead of installed a second time.
+"$cli" install photocraft --version 0.3.0
+export CRAFTSPACE_HOME="$RUNNER_TEMP/cs-fresh"
+"$cli" detect | tee "$RUNNER_TEMP/detect.txt"
+grep -q "Found PhotoCraft 0.3.0" "$RUNNER_TEMP/detect.txt"
+test "$(installed photocraft executable)" = "$CRAFTSPACE_MAC_APPLICATIONS/PhotoCraft.app"
+"$cli" update photocraft
+test "$(ls "$CRAFTSPACE_MAC_APPLICATIONS" | grep -c PhotoCraft)" -eq 1
+test "$(plist_version "$CRAFTSPACE_MAC_APPLICATIONS/PhotoCraft.app")" != "0.3.0"
+"$cli" uninstall photocraft --yes
+test -z "$(ls "$CRAFTSPACE_MAC_APPLICATIONS" | grep PhotoCraft || true)"
+export CRAFTSPACE_HOME="$RUNNER_TEMP/cs"
+
 # ArtCraft (a Tauri app with its own release pipeline).
 "$cli" install artcraft
 test -d "$(installed artcraft executable)"

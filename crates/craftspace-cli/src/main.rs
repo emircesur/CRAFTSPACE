@@ -123,6 +123,8 @@ enum Command {
     ApplyPolicy,
     /// Open a file in the ArtCraft app that handles it.
     OpenFile { file: PathBuf },
+    /// Find ArtCraft apps installed without CraftSpace and keep them up to date where they are.
+    Detect,
     /// Open ArtCraft file types through CraftSpace (double-clicking opens the right app, or
     /// offers to install it).
     FileTypes {
@@ -447,6 +449,15 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 }
             }
         }
+        Command::Detect => {
+            let found = manager.adopt_installed()?;
+            if found.is_empty() {
+                say!("No other ArtCraft apps found (apps CraftSpace already knows aren't listed again).");
+            }
+            for (name, version) in found {
+                say!("Found {name} {}", version.map(|v| v.to_string()).unwrap_or_else(|| "(version unknown)".into()));
+            }
+        }
         Command::OpenFile { file } => match manager.open_file(&file)? {
             None => {}
             Some(id) => {
@@ -521,6 +532,15 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
 fn refresh_all(manager: &Manager, force: bool) {
     if let Err(err) = manager.refresh_catalog() {
         log::info!("using the built-in app list: {err:#}");
+    }
+    // Apps installed without CraftSpace are listed and updated too.
+    match manager.adopt_installed() {
+        Ok(found) => {
+            for (name, version) in found {
+                say!("Found {name} {} on this computer", version.map(|v| v.to_string()).unwrap_or_default());
+            }
+        }
+        Err(err) => log::warn!("couldn't look for apps installed without CraftSpace: {err:#}"),
     }
     for (id, err) in manager.refresh_all(force) {
         eprintln!("warning: could not check {id}: {err:#}");

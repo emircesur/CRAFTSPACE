@@ -241,6 +241,7 @@ pub fn self_install(manager: &Manager) -> anyhow::Result<PathBuf> {
         executable: &exe,
         desktop_shortcut: manager.settings().desktop_shortcuts,
         uninstall_command: Some(uninstall),
+        applications: None,
         size_bytes: crate::state::dir_size(&dir),
     })?;
     manager.record_self_install(crate::state::InstalledApp {
@@ -258,6 +259,7 @@ pub fn self_install(manager: &Manager) -> anyhow::Result<PathBuf> {
             size_bytes: None,
             delta_downloaded: None,
             system_package: None,
+            external: None,
         },
         previous: None,
         integration: integration.files,

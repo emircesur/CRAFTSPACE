@@ -32,6 +32,10 @@ pub struct Settings {
     pub prefer_system_installer: bool,
     /// The user has picked portable or installer (asked before the first install).
     pub install_mode_chosen: bool,
+    /// Find ArtCraft apps installed without CraftSpace and keep them up to date where they are.
+    pub detect_installed: bool,
+    /// Update CraftSpace itself in the background (the new version runs from the next start).
+    pub auto_update_self: bool,
     /// Where apps get installed; defaults to the `apps` folder in the CraftSpace root.
     pub install_dir: Option<PathBuf>,
     /// Add a desktop shortcut next to the Start menu / app menu entry.
@@ -138,6 +142,8 @@ impl Default for Settings {
             keep_previous_version: true,
             prefer_system_installer: false,
             install_mode_chosen: false,
+            detect_installed: true,
+            auto_update_self: true,
             install_dir: None,
             desktop_shortcuts: false,
             github_token: None,

@@ -40,9 +40,41 @@ $pdf = Installed pdfcraft
 Check ($pdf.current.kind -eq "msi") "installed with the MSI"
 Write-Host "PdfCraft program: $($pdf.current.executable)"
 Check ($pdf.current.executable -and (Test-Path $pdf.current.executable)) "MSI program found through its Settings > Apps entry"
+# Installed without CraftSpace (here: by another CraftSpace data folder): found through its
+# Settings > Apps entry and kept as an MSI install.
+$mainHome = $env:CRAFTSPACE_HOME
+$env:CRAFTSPACE_HOME = Join-Path $env:RUNNER_TEMP "cs-fresh"
+$found = (& $cli detect) -join "`n"
+Write-Host $found
+Check ($found -match "Found PdfCraft") "detect found the MSI-installed PdfCraft"
+Check ((Installed pdfcraft).current.kind -eq "msi") "kept as an MSI install"
+Remove-Item -Recurse -Force $env:CRAFTSPACE_HOME
+$env:CRAFTSPACE_HOME = $mainHome
 & $cli -q uninstall pdfcraft --yes
 Check ($null -eq (Installed pdfcraft)) "MSI uninstalled"
 & $cli config prefer_system_installer false
+
+# A portable copy unpacked in Downloads: found, and updated next to it (not into CraftSpace's
+# folder), with the found copy kept for rollback.
+& $cli install photocraft --version 0.3.0
+$downloads = Join-Path $env:USERPROFILE "Downloads"
+New-Item -ItemType Directory -Force $downloads | Out-Null
+$copy = Join-Path $downloads "photocraft-0.3.0-windows-x64-portable"
+Copy-Item -Recurse (Installed photocraft).current.dir $copy
+& $cli -q uninstall photocraft --yes
+$mainHome = $env:CRAFTSPACE_HOME
+$env:CRAFTSPACE_HOME = Join-Path $env:RUNNER_TEMP "cs-portable"
+$found = (& $cli detect) -join "`n"
+Write-Host $found
+Check ($found -match "Found PhotoCraft 0.3.0") "detect found the portable copy in Downloads"
+& $cli update photocraft
+$pc = Installed photocraft
+Write-Host "updated to: $($pc.current.dir)"
+Check ($pc.current.version -ne "0.3.0") "the found copy was updated"
+Check ((Split-Path $pc.current.dir -Parent) -eq $downloads) "the update went next to the found copy"
+Check (Test-Path (Join-Path $copy "photocraft.exe")) "the found copy is kept"
+& $cli -q uninstall photocraft --yes
+$env:CRAFTSPACE_HOME = $mainHome
 
 # ArtCraft ships an NSIS setup program (per user, silent with /S).
 & $cli -q install artcraft

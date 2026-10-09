@@ -110,6 +110,8 @@ pub enum Msg {
     SelfUpdateFound(Option<Box<SelfUpdate>>),
     SelfUpdateDone(Result<String, String>),
     TestNotification(Result<(), String>),
+    /// Apps found on this computer and adopted: (name, version).
+    Adopted(Vec<(String, Option<Version>)>),
 }
 
 /// Sends messages and wakes the UI.
@@ -204,6 +206,11 @@ pub fn refresh(bus: &Bus, manager: &Manager, force: bool, manual: bool) {
     bus.spawn("refresh", move |bus| {
         if let Err(err) = manager.refresh_catalog() {
             log::info!("using the built-in app list: {err:#}");
+        }
+        match manager.adopt_installed() {
+            Ok(found) if !found.is_empty() => bus.send(Msg::Adopted(found)),
+            Ok(_) => {}
+            Err(err) => log::warn!("couldn't look for apps installed without CraftSpace: {err:#}"),
         }
         let errors = manager.refresh_all(force).into_iter().map(|(id, e)| (id, format!("{e:#}"))).collect();
         bus.send(Msg::Refreshed { errors, manual });

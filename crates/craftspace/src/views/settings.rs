@@ -39,6 +39,7 @@ pub fn window(app: &mut CraftSpaceApp, ctx: &egui::Context) {
             ui.add_enabled(free("include_prereleases"), egui::Checkbox::new(&mut draft.include_prereleases, "Offer pre-releases (release candidates)"));
             ui.label(RichText::new("Each app can follow its own channel or stay on a version: see its Overview page.").size(12.0).color(p.weak));
             ui.add_enabled(free("keep_previous_version"), egui::Checkbox::new(&mut draft.keep_previous_version, "Keep the previous version after updating, so it can be rolled back"));
+            ui.add_enabled(free("auto_update_self"), egui::Checkbox::new(&mut draft.auto_update_self, "Update CraftSpace itself automatically (the new version runs from the next start)"));
             ui.horizontal(|ui| {
                 ui.add_enabled(free("notifications"), egui::Checkbox::new(&mut draft.notifications, "Show notifications when updates are found or installed"));
                 if ui.small_button("Send a test").clicked() {
@@ -63,6 +64,8 @@ pub fn window(app: &mut CraftSpaceApp, ctx: &egui::Context) {
             ui.add_enabled(free("allow_unverified_downloads"), egui::Checkbox::new(&mut draft.allow_unverified_downloads, "Allow packages that publish no checksum (not recommended)"));
 
             section(ui, &p, "Installation");
+            ui.add_enabled(free("detect_installed"), egui::Checkbox::new(&mut draft.detect_installed, "Find ArtCraft apps installed without CraftSpace, and update them where they are"))
+                .on_hover_text("Apps from their own installers, disk images, packages or Flatpak, and portable copies in your usual folders.");
             ui.label("Install apps in");
             ui.horizontal(|ui| {
                 let current = draft.install_dir.clone().unwrap_or_else(|| app.manager.paths().apps.clone());

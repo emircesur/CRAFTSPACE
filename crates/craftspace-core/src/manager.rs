@@ -279,6 +279,10 @@ impl Manager {
         if let Some(location) = &plan.location {
             return location.join(&plan.app.id);
         }
+        // A portable copy or AppImage found on this computer: new versions go next to it.
+        if let Some(home) = self.installed_app(&plan.app.id).and_then(|a| a.current.external).and_then(|e| e.home) {
+            return home;
+        }
         self.installed_app(&plan.app.id)
             .and_then(|a| a.current.dir.filter(|_| a.current.kind.is_managed()))
             .and_then(|d| d.parent().map(Path::to_path_buf))
@@ -340,6 +344,30 @@ impl Manager {
                 && installed.is_some_and(|i| !i.current.version.pre.is_empty()))
     }
 
+    /// Which kinds of package to prefer for `app`. An app installed without CraftSpace keeps its
+    /// kind (its installer, package, AppImage or portable copy), so it updates where it is.
+    fn prefs_for(
+        &self,
+        app: &AppEntry,
+        settings: &Settings,
+        installed: Option<&InstalledApp>,
+    ) -> crate::platform::AssetPrefs {
+        let mut prefs = settings.asset_prefs(app);
+        if let Some(current) = installed.map(|i| &i.current).filter(|c| c.external.is_some()) {
+            match current.kind {
+                AssetKind::Msi => (prefs.prefer_system_installer, prefs.prefer_exe_installer) = (true, false),
+                AssetKind::Exe => (prefs.prefer_system_installer, prefs.prefer_exe_installer) = (true, true),
+                AssetKind::Rpm | AssetKind::Deb => prefs.prefer_system_installer = true,
+                AssetKind::AppImage => (prefs.prefer_system_installer, prefs.prefer_appimage) = (false, true),
+                AssetKind::PortableZip | AssetKind::TarGz => {
+                    (prefs.prefer_system_installer, prefs.prefer_appimage) = (false, false)
+                }
+                AssetKind::Dmg => {}
+            }
+        }
+        prefs
+    }
+
     pub fn state(&self, id: &str) -> Option<AppState> {
         let app = self.app(id)?;
         let settings = self.settings();
@@ -351,11 +379,13 @@ impl Manager {
         let installable = latest.as_ref().and_then(|r| {
             self.inner
                 .platform
-                .select_asset(&app.id, &r.asset_names(), settings.asset_prefs(&app))
+                .select_asset(&app.id, &r.asset_names(), self.prefs_for(&app, &settings, installed.as_ref()))
                 .map(|(i, kind)| (r.assets[i].clone(), kind))
         });
+        let from_flatpak =
+            installed.as_ref().is_some_and(|i| i.current.external.as_ref().is_some_and(|e| e.flatpak.is_some()));
         let update_available = match (&installed, latest.as_ref().and_then(|r| r.version.as_ref())) {
-            (_, _) if matches!(channel, Channel::Pinned(_)) => false,
+            (_, _) if matches!(channel, Channel::Pinned(_)) || from_flatpak => false,
             (Some(i), Some(latest)) => installable.is_some() && latest > &i.current.version,
             _ => false,
         };
@@ -411,10 +441,15 @@ impl Manager {
                     .ok_or_else(|| anyhow::anyhow!("{} has no releases yet", app.name))?
             }
         };
+        let installed = self.installed_app(id);
+        if installed.as_ref().is_some_and(|i| i.current.external.as_ref().is_some_and(|e| e.flatpak.is_some())) {
+            anyhow::bail!("{} is installed from Flatpak, which keeps it up to date (flatpak update)", app.name);
+        }
+        let prefs = self.prefs_for(&app, &settings, installed.as_ref());
         let (index, kind) =
-            self.inner.platform.select_asset(&app.id, &release.asset_names(), settings.asset_prefs(&app)).ok_or_else(
-                || anyhow::anyhow!("{} {} has no build for {}", app.name, release.tag, self.inner.platform.display()),
-            )?;
+            self.inner.platform.select_asset(&app.id, &release.asset_names(), prefs).ok_or_else(|| {
+                anyhow::anyhow!("{} {} has no build for {}", app.name, release.tag, self.inner.platform.display())
+            })?;
         if release.assets[index].sha256.is_none() {
             if let Err(err) = self.github().fill_checksums(&mut release) {
                 log::warn!("could not fetch checksums for {} {}: {err:#}", app.name, release.tag);
@@ -493,6 +528,10 @@ impl Manager {
             self.install_system(plan, &version, &archive_path, &sha256, progress)?
         };
         new_version.delta_downloaded = delta_downloaded;
+        // An app found on this computer stays where it was found for later updates too.
+        if let Some(prev) = previous.as_ref().filter(|p| p.current.kind == plan.kind) {
+            new_version.external.clone_from(&prev.current.external);
+        }
 
         // macOS: move the old bundle out of ~/Applications before the new one goes in.
         let deactivated = previous
@@ -502,9 +541,15 @@ impl Manager {
         // Shortcuts and registrations for the new version, then drop the ones it no longer makes.
         progress.stage(Stage::Integrating);
         let mut integration = integrate::Integration::default();
+        // macOS: an app found in /Applications is replaced there, not added to ~/Applications.
+        let applications = previous
+            .as_ref()
+            .filter(|p| p.current.external.is_some() && p.current.kind == AssetKind::Dmg && plan.kind == AssetKind::Dmg)
+            .and_then(|p| p.current.executable.as_ref().and_then(|b| b.parent()).map(Path::to_path_buf));
         if let Some(exe) = new_version.executable.clone().filter(|_| plan.kind.is_managed()) {
             let dir = new_version.dir.clone().unwrap_or_default();
             let req = integrate::Request {
+                applications: applications.as_deref(),
                 app: &plan.app,
                 version: &version,
                 dir: &dir,
@@ -544,7 +589,13 @@ impl Manager {
                 if let Some(exe) = deactivated {
                     old.current.executable = Some(exe);
                 }
-                if old.current.dir != new_version.dir {
+                if old.current.external.is_some() {
+                    // Found on this computer: never deleted. A portable copy stays as the version
+                    // to roll back to; others were replaced in place.
+                    if old.current.dir.as_ref().is_some_and(|d| d.exists()) && old.current.dir != new_version.dir {
+                        kept = Some(old.current);
+                    }
+                } else if old.current.dir != new_version.dir {
                     if keep_previous && old.current.kind.is_managed() && old.current.version != new_version.version {
                         kept = Some(old.current);
                     } else {
@@ -552,7 +603,7 @@ impl Manager {
                     }
                 }
             }
-            for v in to_remove {
+            for v in to_remove.into_iter().filter(|v| v.external.is_none()) {
                 if let Some(dir) = v.dir.filter(|d| Some(d) != new_version.dir.as_ref()) {
                     db.remove_dir_or_defer(&dir);
                 }
@@ -642,7 +693,12 @@ impl Manager {
         progress.stage(Stage::Installing);
         let app_dir = self.app_dir(plan);
         std::fs::create_dir_all(&app_dir)?;
-        let dir = free_dir(&app_dir, &version.to_string());
+        // Next to a copy found on this computer, the folder says which app it is.
+        let beside_external = self
+            .installed_app(&plan.app.id)
+            .is_some_and(|a| a.current.external.as_ref().is_some_and(|e| e.home.is_some()));
+        let name = if beside_external { format!("{}-{version}", plan.app.id) } else { version.to_string() };
+        let dir = free_dir(&app_dir, &name);
 
         let result = (|| -> anyhow::Result<PathBuf> {
             match plan.kind {
@@ -697,6 +753,7 @@ impl Manager {
             installed_at: github::now_secs(),
             delta_downloaded: None,
             system_package: None,
+            external: None,
         })
     }
 
@@ -730,6 +787,7 @@ impl Manager {
                 size_bytes: plan.asset.size,
                 delta_downloaded: None,
                 system_package: Some(name),
+                external: None,
             });
         }
         anyhow::ensure!(self.inner.platform.os == Os::Windows, "{:?} packages only install on Windows", plan.kind);
@@ -763,6 +821,7 @@ impl Manager {
             size_bytes: plan.asset.size,
             delta_downloaded: None,
             system_package: None,
+            external: None,
         })
     }
 
@@ -792,6 +851,7 @@ impl Manager {
             executable: &exe,
             desktop_shortcut: self.settings().desktop_shortcuts,
             uninstall_command: Some(self.uninstall_command(id)),
+            applications: None,
             size_bytes: previous.size_bytes.unwrap_or(0),
         };
         let mut integration = integrate::integrate(&req).unwrap_or_else(|err| {
@@ -820,6 +880,9 @@ impl Manager {
         let _busy = self.mark_busy(id)?;
         let installed = self.installed_app(id).ok_or_else(|| anyhow::anyhow!("{id} is not installed"))?;
         let app_dir = installed.current.dir.as_ref().and_then(|d| d.parent()).map(Path::to_path_buf);
+        if let Some(external) = &installed.current.external {
+            self.uninstall_external(&installed, external)?;
+        }
         if !installed.current.kind.is_managed() {
             self.uninstall_system(id, &installed)?;
         }
@@ -879,6 +942,96 @@ impl Manager {
         Ok(())
     }
 
+    /// Find ArtCraft apps installed without CraftSpace and record them, so they show as installed
+    /// and update where they are. Adopted apps that are gone since are forgotten. Returns what was
+    /// newly found, as (name, version).
+    pub fn adopt_installed(&self) -> anyhow::Result<Vec<(String, Option<Version>)>> {
+        if !self.settings().detect_installed {
+            return Ok(Vec::new());
+        }
+        let own = vec![
+            self.inner.paths.root.clone(),
+            self.inner.paths.apps.clone(),
+            self.apps_root(),
+            crate::selfupdate::install_dir(self),
+        ];
+        let db = self.installed();
+        let found = crate::detect::find(&self.catalog(), &|id| db.apps.contains_key(id), &own);
+        let gone: Vec<String> = db
+            .apps
+            .values()
+            .filter(|a| {
+                a.current.external.as_ref().is_some_and(|e| e.flatpak.is_none())
+                    && a.current.executable.as_ref().is_none_or(|e| !e.exists())
+            })
+            .map(|a| a.id.clone())
+            .collect();
+        if found.is_empty() && gone.is_empty() {
+            return Ok(Vec::new());
+        }
+        let catalog = self.catalog();
+        self.with_db(|db| {
+            for id in &gone {
+                log::info!("{id} isn't where it was found anymore; forgetting it");
+                db.apps.remove(id);
+            }
+            let mut adopted = Vec::new();
+            for f in found {
+                if db.apps.contains_key(&f.app_id) {
+                    continue;
+                }
+                let name = catalog.app(&f.app_id).map(|a| a.name.clone()).unwrap_or_else(|| f.app_id.clone());
+                adopted.push((name, f.version.clone()));
+                let version = f.version.clone().unwrap_or_else(|| Version::new(0, 0, 0));
+                db.apps.insert(
+                    f.app_id.clone(),
+                    InstalledApp {
+                        id: f.app_id.clone(),
+                        current: InstalledVersion {
+                            tag: format!("v{version}"),
+                            version,
+                            asset: String::new(),
+                            kind: f.kind,
+                            sha256: None,
+                            dir: f.dir,
+                            executable: Some(f.executable),
+                            package: None,
+                            installed_at: github::now_secs(),
+                            size_bytes: None,
+                            delta_downloaded: None,
+                            system_package: f.system_package,
+                            external: Some(f.external),
+                        },
+                        previous: None,
+                        integration: Vec::new(),
+                        registry_keys: Vec::new(),
+                        last_launched: None,
+                    },
+                );
+            }
+            adopted
+        })
+    }
+
+    /// Remove an app CraftSpace adopted: a Flatpak through flatpak, a bundle or AppImage by
+    /// deleting it. (Installers and packages go through [`Self::uninstall_system`]; portable
+    /// folders are removed with the other version folders.)
+    fn uninstall_external(&self, installed: &InstalledApp, external: &crate::detect::External) -> anyhow::Result<()> {
+        if let Some(id) = &external.flatpak {
+            let status =
+                std::process::Command::new("flatpak").args(["uninstall", "--noninteractive", "-y", id]).status()?;
+            anyhow::ensure!(status.success(), "flatpak uninstall {id} failed ({status})");
+            return Ok(());
+        }
+        let current = &installed.current;
+        if current.kind == AssetKind::Dmg || (current.kind == AssetKind::AppImage && current.dir.is_none()) {
+            if let Some(exe) = current.executable.as_ref().filter(|e| e.exists()) {
+                integrate::remove(std::slice::from_ref(exe), &[]);
+            }
+        }
+        Ok(())
+    }
+
     /// Record CraftSpace's own installation (see [`crate::selfupdate::self_install`]).
     pub fn record_self_install(&self, record: InstalledApp) -> anyhow::Result<()> {
         self.with_db(|db| {
@@ -923,7 +1076,7 @@ impl Manager {
             let (missing, changed) = crate::integrate::linux_packages::verify(current.kind, name)?;
             return Ok(VerifyReport { checked: 1, missing, changed });
         }
-        let Some(dir) = current.dir.as_ref().filter(|_| current.kind.is_managed()) else {
+        let Some(dir) = current.dir.as_ref().filter(|_| current.kind.is_managed() && current.external.is_none()) else {
             // System installs: all we can tell is whether the program is still there.
             let exe = current.executable.clone().or_else(|| self.executable(id));
             let missing: Vec<PathBuf> = exe.iter().filter(|e| !e.exists()).cloned().collect();
@@ -1113,6 +1266,10 @@ impl Manager {
         let exe = self
             .executable(id)
             .ok_or_else(|| anyhow::anyhow!("{} is not installed (or its program could not be found)", app.name))?;
+        if let Some(flatpak) = self.installed_app(id).and_then(|a| a.current.external).and_then(|e| e.flatpak) {
+            std::process::Command::new("flatpak").arg("run").arg(&flatpak).args(files).spawn()?;
+            return Ok(());
+        }
         anyhow::ensure!(exe.exists(), "{} is missing; repair or reinstall {}", exe.display(), app.name);
         let mut cmd = if exe.is_dir() {
             integrate::macos::launch_command(&exe, files)
@@ -1510,6 +1667,59 @@ mod tests {
             kind,
             location: None,
         }
+    }
+
+    #[test]
+    fn a_copy_found_on_the_computer_updates_where_it_is() {
+        let tmp = tempfile::tempdir().unwrap();
+        let m = manager(tmp.path());
+        let downloads = tmp.path().join("Downloads");
+        let found = downloads.join("photocraft-0.3.0-portable");
+        let exe = found.join(if cfg!(windows) { "photocraft.exe" } else { "photocraft" });
+        std::fs::create_dir_all(&found).unwrap();
+        std::fs::write(&exe, b"old").unwrap();
+        let kind = local_plan(&m, "0.3.0").kind;
+        m.with_db(|db| {
+            db.apps.insert(
+                "photocraft".into(),
+                InstalledApp {
+                    id: "photocraft".into(),
+                    current: InstalledVersion {
+                        version: Version::new(0, 3, 0),
+                        tag: "v0.3.0".into(),
+                        asset: String::new(),
+                        kind,
+                        sha256: None,
+                        dir: Some(found.clone()),
+                        executable: Some(exe.clone()),
+                        package: None,
+                        installed_at: 0,
+                        size_bytes: None,
+                        delta_downloaded: None,
+                        system_package: None,
+                        external: Some(crate::detect::External {
+                            how: "in Downloads".into(),
+                            home: Some(downloads.clone()),
+                            flatpak: None,
+                        }),
+                    },
+                    previous: None,
+                    integration: Vec::new(),
+                    registry_keys: Vec::new(),
+                    last_launched: None,
+                },
+            );
+        })
+        .unwrap();
+        assert_eq!(m.verify("photocraft").unwrap().missing.len(), 0);
+
+        let updated = no_progress(|p| m.install(&local_plan(&m, "0.5.0"), p)).unwrap();
+        let dir = updated.current.dir.clone().unwrap();
+        assert_eq!(dir, downloads.join("photocraft-0.5.0"), "next to the copy that was found");
+        assert!(found.join(exe.file_name().unwrap()).is_file(), "the found copy is kept");
+        assert_eq!(updated.previous.as_ref().and_then(|p| p.dir.clone()), Some(found.clone()));
+        assert!(!m.apps_root().join("photocraft").exists());
+        assert!(updated.current.external.is_some(), "later updates go there too");
     }
 
     #[test]

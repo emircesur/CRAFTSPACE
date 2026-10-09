@@ -47,7 +47,13 @@ pub fn sidebar(app: &mut CraftSpaceApp, ui: &mut Ui) {
             .size(11.5)
             .color(p.weak),
     );
-    if let Some(update) = &app.self_update {
+    if let Some(v) = app.self_update_ready.clone() {
+        ui.add_space(4.0);
+        theme::chip(ui, &format!("CraftSpace {v} is ready"), p.good);
+        if ui.add(egui::Button::new("Restart to use it").small()).clicked() {
+            app.actions.push(Action::RestartCraftSpace);
+        }
+    } else if let Some(update) = &app.self_update {
         ui.add_space(4.0);
         theme::chip(ui, &format!("CraftSpace {} available", update.version), p.accent);
         if app.self_updating {
@@ -631,6 +637,19 @@ fn detail(app: &mut CraftSpaceApp, ui: &mut Ui, id: &str) {
                     theme::chip(ui, &format!("Like {like}"), p.weak);
                 }
                 theme::chip(ui, "Open source", p.good);
+                if let Some(external) = s.installed.as_ref().and_then(|i| i.current.external.as_ref()) {
+                    let (label, tip) = match &external.flatpak {
+                        Some(id) => (
+                            "Updated by Flatpak".to_string(),
+                            format!("Installed from Flatpak ({id}); update it with your software center"),
+                        ),
+                        None => (
+                            "Found on this computer".to_string(),
+                            format!("Installed {} without CraftSpace; CraftSpace updates it there", external.how),
+                        ),
+                    };
+                    ui.scope(|ui| theme::chip(ui, &label, p.accent)).response.on_hover_text(tip);
+                }
             });
         });
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
