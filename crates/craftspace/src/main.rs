@@ -4,6 +4,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod app;
+mod dock;
 mod renderer;
 mod theme;
 mod tray;
@@ -55,20 +56,20 @@ fn main() -> eframe::Result {
     // `--background`: started at login; stay in the tray until opened.
     let background = args.iter().any(|a| a == craftspace_core::autostart::BACKGROUND_FLAG);
     let renderer = renderer::choose(manager.paths());
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_visible(!background)
-            .with_title("CraftSpace")
-            .with_app_id("craftspace")
-            .with_inner_size([1240.0, 800.0])
-            .with_min_inner_size([760.0, 520.0])
-            .with_icon(
-                eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/craftspace-256.png"))
-                    .expect("bundled icon is a valid PNG"),
-            ),
-        renderer,
-        ..Default::default()
-    };
+    let viewport = egui::ViewportBuilder::default()
+        .with_visible(!background)
+        .with_title("CraftSpace")
+        .with_app_id("craftspace")
+        .with_inner_size([1240.0, 800.0])
+        .with_min_inner_size([760.0, 520.0]);
+    // On macOS the Dock icon is the app bundle's, or the full-colour one while the window is open
+    // (see `dock`).
+    #[cfg(not(target_os = "macos"))]
+    let viewport = viewport.with_icon(
+        eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/craftspace-256.png"))
+            .expect("bundled icon is a valid PNG"),
+    );
+    let options = eframe::NativeOptions { viewport, renderer, ..Default::default() };
     let paths = manager.paths().clone();
     let result = eframe::run_native(
         "CraftSpace",

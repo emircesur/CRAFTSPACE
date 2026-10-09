@@ -115,7 +115,18 @@ sudo dnf install craftspace
 
 **Debian, Ubuntu:** `sudo apt install ./craftspace-<version>-linux-x86_64.deb`.
 
-**Any Linux:**
+**Any Linux (AppImage):** download `craftspace-<version>-linux-x86_64.AppImage` (or `aarch64`),
+make it executable and run it:
+
+```sh
+chmod +x craftspace-*-linux-x86_64.AppImage && ./craftspace-*-linux-x86_64.AppImage
+./craftspace-*-linux-x86_64.AppImage --cli list      # the command line, from the same file
+```
+
+It offers to add itself to your app menu (keeping a copy in CraftSpace's folder) and updates
+that copy itself. The AppImage also carries update information for AppImageUpdate.
+
+**Any Linux (script):**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/emircesur/craftspace/HEAD/install.sh | sh

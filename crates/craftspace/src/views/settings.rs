@@ -168,6 +168,15 @@ pub fn window(app: &mut CraftSpaceApp, ctx: &egui::Context) {
                 ui.selectable_value(&mut draft.theme, Theme::Light, "Light");
                 ui.selectable_value(&mut draft.theme, Theme::System, "Match system");
             });
+            if os == Os::Macos {
+                use craftspace_core::settings::DockIcon;
+                ui.add_space(4.0);
+                ui.label("Dock icon");
+                ui.radio_value(&mut draft.dock_icon, DockIcon::ColorWhenOpen, "Full colour while the window is open, macOS's icon style otherwise");
+                ui.radio_value(&mut draft.dock_icon, DockIcon::Color, "Always full colour");
+                ui.radio_value(&mut draft.dock_icon, DockIcon::System, "Always macOS's icon style (dark, clear or tinted, like the ArtCraft apps)");
+                ui.label(RichText::new("The icon style is chosen in System Settings › Appearance.").size(12.0).color(p.weak));
+            }
 
             section(ui, &p, "Your apps");
             ui.label(RichText::new("Save the list of installed apps (with versions and channels) to set up another computer the same way.").color(p.weak));

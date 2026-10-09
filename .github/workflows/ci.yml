@@ -72,7 +72,7 @@ jobs:
   fedora:
     name: Fedora (RPM)
     runs-on: ubuntu-latest
-    container: fedora:latest
+    container: quay.io/fedora/fedora:latest
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:

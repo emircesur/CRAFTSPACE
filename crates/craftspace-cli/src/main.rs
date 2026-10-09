@@ -900,8 +900,20 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         }
         Command::Autostart { state } => {
             let on = matches!(state, OnOff::On);
-            let exe =
-                std::env::current_exe()?.with_file_name(if cfg!(windows) { "craftspace.exe" } else { "craftspace" });
+            // From an AppImage: the AppImage itself (its programs only exist while it runs).
+            let exe = match selfupdate::running_appimage() {
+                Some(appimage) => {
+                    let installed = selfupdate::installed_appimage(&manager);
+                    if installed.is_file() {
+                        installed
+                    } else {
+                        appimage
+                    }
+                }
+                None => {
+                    std::env::current_exe()?.with_file_name(if cfg!(windows) { "craftspace.exe" } else { "craftspace" })
+                }
+            };
             autostart::set(on, &exe)?;
             let mut settings = manager.settings();
             settings.start_at_login = on;

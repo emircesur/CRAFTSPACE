@@ -45,11 +45,19 @@ pub fn check(manager: &Manager) -> anyhow::Result<Option<SelfUpdate>> {
     let list = manager.github().releases(&update_repo(manager), false)?;
     let Some(release) = list.latest(settings.include_prereleases).cloned() else { return Ok(None) };
     let Some(version) = release.version.clone().filter(|v| *v > current_version()) else { return Ok(None) };
-    // Self-updates always use the archive builds, never an installer.
-    let Some((i, kind)) = manager.platform().select_asset(NAME, &release.asset_names(), Default::default()) else {
+    // Self-updates use the archive builds (never an installer), or the AppImage when that's
+    // what's running.
+    let appimage = running_appimage().is_some();
+    let prefs = crate::platform::AssetPrefs { prefer_appimage: appimage, ..Default::default() };
+    let Some((i, kind)) = manager.platform().select_asset(NAME, &release.asset_names(), prefs) else {
         return Ok(None);
     };
-    if !matches!(kind, AssetKind::PortableZip | AssetKind::TarGz | AssetKind::Dmg) {
+    let fits = match kind {
+        AssetKind::AppImage => appimage,
+        AssetKind::PortableZip | AssetKind::TarGz | AssetKind::Dmg => !appimage,
+        _ => false,
+    };
+    if !fits {
         return Ok(None);
     }
     let mut release = release;
@@ -71,7 +79,9 @@ pub fn apply(manager: &Manager, update: &SelfUpdate, progress: &Progress) -> any
     if staging.exists() {
         std::fs::remove_dir_all(&staging)?;
     }
-    let result = if update.kind == AssetKind::Dmg {
+    let result = if update.kind == AssetKind::AppImage {
+        replace_running_appimage(&archive_path)
+    } else if update.kind == AssetKind::Dmg {
         crate::integrate::macos::install_dmg(&archive_path, &staging)
             .and_then(|bundle| replace_running_bundle(&bundle, &downloads))
     } else {
@@ -99,6 +109,39 @@ fn replace_running(staging: &Path, os: Os) -> anyhow::Result<()> {
             std::fs::rename(&tmp, &target)?;
         }
     }
+    Ok(())
+}
+
+/// The AppImage CraftSpace is running from (its runtime sets `APPIMAGE`).
+pub fn running_appimage() -> Option<PathBuf> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    std::env::var_os("APPIMAGE").map(PathBuf::from).filter(|p| p.is_file())
+}
+
+/// Where a self-installed AppImage lives.
+pub fn installed_appimage(manager: &Manager) -> PathBuf {
+    install_dir(manager).join("CraftSpace.AppImage")
+}
+
+/// Swap the running AppImage file for `new` (the running copy keeps working until it quits).
+fn replace_running_appimage(new: &Path) -> anyhow::Result<()> {
+    let running = running_appimage().ok_or_else(|| anyhow::anyhow!("CraftSpace isn't running from an AppImage"))?;
+    let tmp = running.with_extension("AppImage.new");
+    std::fs::copy(new, &tmp)?;
+    make_executable(&tmp)?;
+    std::fs::rename(&tmp, &running)?;
+    Ok(())
+}
+
+fn make_executable(path: &Path) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
+    }
+    let _ = path;
     Ok(())
 }
 
@@ -165,6 +208,9 @@ pub fn installed_exe(manager: &Manager) -> PathBuf {
             return exe;
         }
     }
+    if running_appimage().is_some() {
+        return installed_appimage(manager);
+    }
     let ext = if manager.platform().os == Os::Windows { ".exe" } else { "" };
     install_dir(manager).join("bin").join(format!("{NAME}{ext}"))
 }
@@ -173,6 +219,9 @@ pub fn installed_exe(manager: &Manager) -> PathBuf {
 pub fn is_installed_copy(manager: &Manager) -> bool {
     if from_system_package() {
         return true;
+    }
+    if let Some(appimage) = running_appimage() {
+        return appimage.canonicalize().ok() == installed_appimage(manager).canonicalize().ok();
     }
     if manager.platform().os == Os::Macos {
         // Anywhere in an Applications folder counts.
@@ -204,10 +253,22 @@ pub fn self_install(manager: &Manager) -> anyhow::Result<PathBuf> {
     let dir = install_dir(manager);
     let bin = dir.join("bin");
     std::fs::create_dir_all(&bin)?;
+    // From an AppImage: keep a copy of the AppImage itself (its programs only exist while it
+    // runs), and have the menu entry start that copy.
+    let appimage = running_appimage();
+    if let Some(running) = &appimage {
+        let target = installed_appimage(manager);
+        if running.canonicalize().ok() != target.canonicalize().ok() {
+            let tmp = target.with_extension("AppImage.new");
+            std::fs::copy(running, &tmp)?;
+            make_executable(&tmp)?;
+            std::fs::rename(&tmp, &target)?;
+        }
+    }
 
     for name in [NAME, "craftspace-cli"] {
         let src = src_dir.join(format!("{name}{ext}"));
-        if !src.is_file() {
+        if !src.is_file() || appimage.is_some() {
             continue;
         }
         let dest = bin.join(format!("{name}{ext}"));
@@ -228,7 +289,7 @@ pub fn self_install(manager: &Manager) -> anyhow::Result<PathBuf> {
             }
         })?;
     }
-    let exe = bin.join(format!("{NAME}{ext}"));
+    let exe = if appimage.is_some() { installed_appimage(manager) } else { bin.join(format!("{NAME}{ext}")) };
     anyhow::ensure!(exe.is_file(), "couldn't find {NAME}{ext} next to the running program");
 
     // An icon for the menu entry.
@@ -259,7 +320,13 @@ pub fn self_install(manager: &Manager) -> anyhow::Result<PathBuf> {
             version,
             tag: format!("v{}", current_version()),
             asset: String::new(),
-            kind: if os == Os::Windows { AssetKind::PortableZip } else { AssetKind::TarGz },
+            kind: if os == Os::Windows {
+                AssetKind::PortableZip
+            } else if appimage.is_some() {
+                AssetKind::AppImage
+            } else {
+                AssetKind::TarGz
+            },
             sha256: None,
             dir: Some(dir),
             executable: Some(exe.clone()),

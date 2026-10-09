@@ -78,6 +78,22 @@ pub struct Settings {
     pub package_cache_write: bool,
     /// Where add-ons come from besides the CraftSpace registry.
     pub addon_stores: AddonStores,
+    /// macOS: how the Dock shows CraftSpace's icon.
+    pub dock_icon: DockIcon,
+}
+
+/// The Dock icon on macOS. When macOS draws it (the icon in the app), it follows the icon style
+/// chosen in System Settings › Appearance (dark, clear or tinted), like the ArtCraft apps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DockIcon {
+    /// Full colour while the window is open; macOS's style when closed or in the background.
+    #[default]
+    ColorWhenOpen,
+    /// Always full colour while CraftSpace runs.
+    Color,
+    /// Always macOS's style.
+    System,
 }
 
 /// Add-on stores: the ones the registry suggests (on unless turned off) and ones added by hand.
@@ -209,6 +225,7 @@ impl Default for Settings {
             other_sources: OtherSources::default(),
             package_cache: None,
             package_cache_write: false,
+            dock_icon: DockIcon::default(),
             addon_stores: AddonStores::default(),
         }
     }

@@ -255,6 +255,7 @@ pub struct CraftSpaceApp {
     /// Settings › Other sources: the add / change repository dialog.
     pub source_dialog: Option<views::sources::Dialog>,
     pub profile_dialog: Option<views::profile::Dialog>,
+    dock: crate::dock::Dock,
     /// An install waiting for the one-time "portable or installer?" answer.
     pub install_mode_pending: Option<Action>,
     /// `craftspace open <file>` for an app that isn't installed: open it once it is.
@@ -358,6 +359,7 @@ impl CraftSpaceApp {
             about_open: false,
             source_dialog: None,
             profile_dialog: None,
+            dock: Default::default(),
             install_mode_pending: None,
             hidden_without_tray: None,
             quitting: false,
@@ -1811,6 +1813,7 @@ impl eframe::App for CraftSpaceApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_messages(ctx);
         self.handle_tray(ctx);
+        self.dock.update(self.settings.dock_icon, !self.hidden);
         self.rescan_if_changed();
         if self.files.changed_at.is_some() {
             ctx.request_repaint_after(Duration::from_millis(500));
@@ -1913,6 +1916,11 @@ impl eframe::App for CraftSpaceApp {
 /// What start-at-login should run: the installed copy when there is one.
 fn launcher_path(manager: &Manager) -> PathBuf {
     let current = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("craftspace"));
+    // An AppImage's programs only exist while it runs: start the AppImage itself.
+    if let Some(appimage) = selfupdate::running_appimage() {
+        let installed = selfupdate::installed_appimage(manager);
+        return if installed.is_file() { installed } else { appimage };
+    }
     if let Some(bundle) = selfupdate::running_bundle() {
         return bundle.join("Contents/MacOS").join(current.file_name().unwrap_or_default());
     }

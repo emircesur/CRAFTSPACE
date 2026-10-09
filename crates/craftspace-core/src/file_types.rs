@@ -140,6 +140,10 @@ pub fn program(installed: Option<PathBuf>) -> anyhow::Result<PathBuf> {
     if let Some(p) = installed.filter(|p| p.is_file()) {
         return Ok(p);
     }
+    // From an AppImage: the AppImage itself (it passes `open <file>` on to CraftSpace).
+    if let Some(appimage) = crate::selfupdate::running_appimage() {
+        return Ok(appimage);
+    }
     let current = std::env::current_exe()?;
     let app = current.with_file_name(format!("craftspace{}", std::env::consts::EXE_SUFFIX));
     anyhow::ensure!(app.is_file(), "can't find the CraftSpace app next to {}", current.display());

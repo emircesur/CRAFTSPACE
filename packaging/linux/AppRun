@@ -1,0 +1,9 @@
+#!/bin/sh
+# CraftSpace AppImage entry point: the app, or the command line with `--cli`
+# (`./CraftSpace.AppImage --cli list`).
+HERE="$(dirname "$(readlink -f "$0")")"
+if [ "$1" = "--cli" ]; then
+  shift
+  exec "$HERE/usr/bin/craftspace-cli" "$@"
+fi
+exec "$HERE/usr/bin/craftspace" "$@"
