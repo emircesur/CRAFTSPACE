@@ -1,6 +1,6 @@
 # Publishes CraftSpace to winget (`winget install emircesur.CraftSpace`, `winget upgrade`): writes
 # the manifests for a release, checks them with winget itself, and opens the pull request on
-# microsoft/winget-pkgs. Runs after each release; run it by hand to (re)submit one.
+# microsoft/winget-pkgs. Run it by hand after a release (Actions › winget › Run workflow).
 #
 # Submitting needs a WINGET_TOKEN secret: a classic token with the `public_repo` scope from the
 # account the pull requests come from. Without it the manifests are built, tested and kept as an
@@ -60,6 +60,7 @@ jobs:
   test:
     needs: manifests
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -80,7 +81,7 @@ jobs:
           winget validate --manifest winget
           if ($LASTEXITCODE) { throw "winget validate failed" }
           winget settings --enable LocalManifestFiles
-          winget install --manifest winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+          winget install --manifest winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity --log winget-install.log
           if ($LASTEXITCODE) { throw "winget install failed ($LASTEXITCODE)" }
           $cli = "$env:LOCALAPPDATA\CraftSpace\app\bin\craftspace-cli.exe"
           if (-not (Test-Path $cli)) { throw "CraftSpace isn't where the setup puts it" }
@@ -94,6 +95,12 @@ jobs:
           Start-Process "$env:LOCALAPPDATA\CraftSpace\app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
           for ($i = 0; $i -lt 30 -and (Test-Path $cli); $i++) { Start-Sleep 1 }
           if (Test-Path $cli) { throw "the uninstaller left CraftSpace behind" }
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: winget-install-log
+          path: winget-install.log
+          if-no-files-found: ignore
 
   submit:
     needs: [manifests, test]

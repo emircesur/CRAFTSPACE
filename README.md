@@ -291,13 +291,12 @@ as `rust-*`, no vendoring). The spec is a starting point for that.
 
 ### winget
 
-Each release runs [`winget.yml`](.github/workflows/winget.yml): it writes the manifests
+After a release, run [`winget.yml`](.github/workflows/winget.yml) by hand (Actions › winget › Run workflow, with the release's tag): it writes the manifests
 (`packaging/winget/manifests.py`), checks them against winget's schemas, installs, finds and
 uninstalls CraftSpace with winget on Windows, and opens the pull request on
 [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs). Opening the pull request
 needs a `WINGET_TOKEN` repository secret: a classic token with the `public_repo` scope. Without
-it, the manifests are only built, tested and kept as the run's `winget-manifests` artifact. To
-submit an existing release, run the workflow by hand with its tag.
+it, the manifests are only built, tested and kept as the run's `winget-manifests` artifact.
 
 The ArtCraft apps themselves aren't in winget; CraftSpace updates them (`craftspace-cli update`).
 
