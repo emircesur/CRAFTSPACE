@@ -96,6 +96,8 @@ pub enum Action {
     Cleanup,
     TestNotification,
     OpenAbout,
+    /// The answer to "portable or installer?" (true: installer).
+    SetInstallMode(bool),
     /// Save the Files features (from the first-run card or the Files window).
     SaveFilesFeatures(Box<craftspace_core::settings::FilesFeatures>),
     /// Close the first-run card without changing anything.
@@ -215,6 +217,8 @@ pub struct CraftSpaceApp {
     tray_rx: Receiver<TrayCommand>,
     hidden: bool,
     pub about_open: bool,
+    /// An install waiting for the one-time "portable or installer?" answer.
+    pub install_mode_pending: Option<Action>,
     /// `craftspace open <file>` for an app that isn't installed: open it once it is.
     pub pending_open: Option<(String, PathBuf)>,
     /// Hidden while no tray icon is showing (the panel isn't there yet, or went away).
@@ -306,6 +310,7 @@ impl CraftSpaceApp {
             hidden: false,
             pending_open: None,
             about_open: false,
+            install_mode_pending: None,
             hidden_without_tray: None,
             quitting: false,
             told_about_tray: false,
@@ -837,8 +842,26 @@ impl CraftSpaceApp {
         }
     }
 
+    /// Whether to ask "portable or installer?" before this action (once, before the first
+    /// install, where there's a choice).
+    fn ask_install_mode(&self, action: &Action) -> bool {
+        let first_install = match action {
+            Action::Install(id, _) | Action::InstallTo(id) => self.manager.installed_app(id).is_none(),
+            Action::InstallMany(_) => true,
+            _ => false,
+        };
+        first_install
+            && !self.settings.install_mode_chosen
+            && !self.manager.policy().locks("prefer_system_installer")
+            && views::install_mode::has_choice(&self.manager)
+    }
+
     fn handle_actions(&mut self, ctx: &egui::Context) {
         for action in std::mem::take(&mut self.actions) {
+            if self.ask_install_mode(&action) {
+                self.install_mode_pending = Some(action);
+                continue;
+            }
             match action {
                 Action::Install(id, version) => {
                     let installed = self.manager.installed_app(&id).is_some();
@@ -991,6 +1014,15 @@ impl CraftSpaceApp {
                 }
                 Action::TestNotification => worker::test_notification(&self.bus),
                 Action::OpenAbout => self.about_open = true,
+                Action::SetInstallMode(installer) => {
+                    let mut s = self.settings.clone();
+                    s.prefer_system_installer = installer;
+                    s.install_mode_chosen = true;
+                    self.save_settings(s);
+                    if let Some(next) = self.install_mode_pending.take() {
+                        self.actions.push(next);
+                    }
+                }
                 Action::SaveFilesFeatures(features) => {
                     let mut s = self.settings.clone();
                     s.files = *features;
@@ -1384,6 +1416,7 @@ impl CraftSpaceApp {
         views::settings::window(self, ctx);
         views::files::setup_window(self, ctx);
         views::about::window(self, ctx);
+        views::install_mode::window(self, ctx);
     }
 }
 

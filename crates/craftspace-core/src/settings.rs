@@ -30,6 +30,8 @@ pub struct Settings {
     pub keep_previous_version: bool,
     /// On Windows, prefer the MSI installer over the portable build.
     pub prefer_system_installer: bool,
+    /// The user has picked portable or installer (asked before the first install).
+    pub install_mode_chosen: bool,
     /// Where apps get installed; defaults to the `apps` folder in the CraftSpace root.
     pub install_dir: Option<PathBuf>,
     /// Add a desktop shortcut next to the Start menu / app menu entry.
@@ -135,6 +137,7 @@ impl Default for Settings {
             check_interval_hours: 6,
             keep_previous_version: true,
             prefer_system_installer: false,
+            install_mode_chosen: false,
             install_dir: None,
             desktop_shortcuts: false,
             github_token: None,

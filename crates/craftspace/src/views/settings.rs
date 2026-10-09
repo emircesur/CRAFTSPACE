@@ -97,14 +97,24 @@ pub fn window(app: &mut CraftSpaceApp, ctx: &egui::Context) {
             }
             match os {
                 Os::Windows => {
-                    ui.add_enabled(free("prefer_system_installer"), egui::Checkbox::new(&mut draft.prefer_system_installer, "Use the Windows Installer (MSI) instead of the portable build"))
-                        .on_hover_text("MSI installs go to Program Files and may ask for administrator rights. Portable installs are per-user and can be rolled back.");
+                    if ui
+                        .add_enabled(free("prefer_system_installer"), egui::Checkbox::new(&mut draft.prefer_system_installer, "Use each app's installer (MSI or Setup) instead of the portable build"))
+                        .on_hover_text("Installers put apps in Program Files and may ask for administrator rights. Portable installs are per-user and can be rolled back.")
+                        .changed()
+                    {
+                        draft.install_mode_chosen = true;
+                    }
                 }
                 Os::Linux => {
                     if let Some(format) = craftspace_core::platform::linux_package_format() {
                         let (ext, tool) = if format == craftspace_core::platform::AssetKind::Rpm { (".rpm", "dnf") } else { (".deb", "apt") };
-                        ui.add_enabled(free("prefer_system_installer"), egui::Checkbox::new(&mut draft.prefer_system_installer, format!("Install apps as system packages ({ext} through {tool})")))
-                            .on_hover_text("The package manager owns the files; CraftSpace still finds and installs updates. Installing asks for your password.");
+                        if ui
+                            .add_enabled(free("prefer_system_installer"), egui::Checkbox::new(&mut draft.prefer_system_installer, format!("Install apps as system packages ({ext} through {tool})")))
+                            .on_hover_text("The package manager owns the files; CraftSpace still finds and installs updates. Installing asks for your password.")
+                            .changed()
+                        {
+                            draft.install_mode_chosen = true;
+                        }
                     }
                     ui.add_enabled(free("prefer_appimage"), egui::Checkbox::new(&mut draft.prefer_appimage, "Install AppImages, so updates only download what changed"))
                         .on_hover_text("Uses the .zsync files published with each release. How much is saved depends on how much changed between versions.");
