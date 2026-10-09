@@ -1128,7 +1128,7 @@ impl Manager {
                     // A bundle (macOS) or a program in a shared folder like /usr/bin.
                     roots.push(exe.clone());
                 } else if v.dir.is_none() {
-                    if let Some(parent) = exe.parent() {
+                    if let Some(parent) = exe.parent().filter(|p| !p.as_os_str().is_empty()) {
                         roots.push(parent.to_path_buf());
                     }
                 }
@@ -1139,6 +1139,13 @@ impl Manager {
 
     /// Whether the app is open right now.
     pub fn is_running(&self, id: &str) -> bool {
+        // A Flatpak runs inside its sandbox; ask Flatpak.
+        if let Some(flatpak) = self.installed_app(id).and_then(|a| a.current.external).and_then(|e| e.flatpak) {
+            return std::process::Command::new("flatpak")
+                .args(["ps", "--columns=application"])
+                .output()
+                .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.trim() == flatpak));
+        }
         crate::running::any_running_under(&self.program_roots(id))
     }
 

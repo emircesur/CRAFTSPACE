@@ -6,10 +6,11 @@ use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, Update
 
 /// Whether any process's executable lives under one of `roots`.
 pub fn any_running_under(roots: &[PathBuf]) -> bool {
+    // An empty path would match every program.
+    let roots: Vec<PathBuf> = roots.iter().filter(|r| !r.as_os_str().is_empty()).map(|r| normalize(r)).collect();
     if roots.is_empty() {
         return false;
     }
-    let roots: Vec<PathBuf> = roots.iter().map(|r| normalize(r)).collect();
     let mut sys = System::new_with_specifics(RefreshKind::nothing());
     sys.refresh_processes_specifics(
         ProcessesToUpdate::All,
@@ -42,6 +43,11 @@ fn normalize(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_empty_path_matches_nothing() {
+        assert!(!any_running_under(&[PathBuf::new()]));
+    }
 
     #[test]
     fn sees_this_test_running() {
