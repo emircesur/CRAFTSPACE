@@ -4,6 +4,7 @@
 //! [`github`], [`download`]s with checksum verification, unpacking ([`archive`]), desktop
 //! [`integrate`]ion and the record of what is installed ([`state`]).
 
+pub mod addons;
 pub mod app_data;
 pub mod archive;
 pub mod catalog;

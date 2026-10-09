@@ -1,0 +1,28 @@
+# Checks the add-on registry (addons/registry.json) on every change: entries are complete, go
+# where their apps read, and every download matches its pinned SHA-256. CraftSpace's own packs
+# must match a fresh build of addons/build.py.
+name: Add-ons
+
+on:
+  push:
+    branches: [main]
+    paths: ["addons/**", "catalog.json", ".github/workflows/addons.yml"]
+  pull_request:
+    paths: ["addons/**", "catalog.json", ".github/workflows/addons.yml"]
+  schedule:
+    # Weekly: downloads that disappeared or changed upstream.
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  registry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: CraftSpace's packs are reproducible
+        run: python3 addons/build.py --check
+      - name: Registry entries and downloads
+        run: python3 addons/validate.py --download

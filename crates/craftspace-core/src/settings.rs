@@ -76,6 +76,17 @@ pub struct Settings {
     pub package_cache: Option<PathBuf>,
     /// Also put downloaded packages into `package_cache` for the other computers.
     pub package_cache_write: bool,
+    /// Where add-ons come from besides the CraftSpace registry.
+    pub addon_stores: AddonStores,
+}
+
+/// Add-on stores: the ones the registry suggests (on unless turned off) and ones added by hand.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AddonStores {
+    /// Ids of suggested stores that are turned off.
+    pub disabled: Vec<String>,
+    pub custom: Vec<crate::addons::Store>,
 }
 
 /// Optional: apps from any GitHub repository, and other repositories (forks, mirrors, backups)
@@ -198,6 +209,7 @@ impl Default for Settings {
             other_sources: OtherSources::default(),
             package_cache: None,
             package_cache_write: false,
+            addon_stores: AddonStores::default(),
         }
     }
 }

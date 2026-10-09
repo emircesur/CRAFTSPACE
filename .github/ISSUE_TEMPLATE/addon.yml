@@ -1,0 +1,65 @@
+name: Submit an add-on
+description: Suggest presets, palettes, LUTs or plug-ins for the CraftSpace add-on registry.
+title: "Add-on: "
+labels: ["add-on"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! Add-ons from submissions are listed as **not checked for security** until a maintainer reviews them.
+        You can also open a pull request yourself: see [addons/README.md](https://github.com/emircesur/CRAFTSPACE/blob/main/addons/README.md).
+  - type: input
+    id: name
+    attributes:
+      label: Name
+    validations:
+      required: true
+  - type: dropdown
+    id: apps
+    attributes:
+      label: For which apps?
+      multiple: true
+      options: [PhotoCraft, LightCraft, VectorCraft, DesignCraft, FilmCraft, EffectCraft, SoundCraft, WordCraft, DeckCraft, GridCraft, PdfCraft, CADCraft, ArtCraft]
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options: ["Presets, palettes, LUTs or templates", "App plug-in (WebAssembly) or script", "Audio plug-in (CLAP, VST3, AU)"]
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What it does
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: Source code or home page
+      placeholder: https://github.com/…
+    validations:
+      required: true
+  - type: textarea
+    id: downloads
+    attributes:
+      label: Downloads
+      description: One https:// address per platform (a release asset, not a page). Versioned files that never change, please.
+    validations:
+      required: true
+  - type: input
+    id: license
+    attributes:
+      label: License
+      placeholder: e.g. MIT, GPL-3.0, CC0-1.0, CC-BY-4.0
+    validations:
+      required: true
+  - type: checkboxes
+    id: rights
+    attributes:
+      label: Rights
+      options:
+        - label: I made this, or its license allows it to be shared like this. It contains no Adobe (or other vendors') presets, brushes or assets.
+          required: true

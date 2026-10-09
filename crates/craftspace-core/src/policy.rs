@@ -74,6 +74,8 @@ pub struct Policy {
     /// Apps can't be uninstalled, rolled back or moved to another channel (only by an
     /// administrator, from the command line).
     pub prevent_uninstall: bool,
+    /// Only add-ons checked by CraftSpace may be installed (not plug-ins from other stores).
+    pub block_unchecked_addons: bool,
     /// After each check, CraftSpace writes `<computer name>.json` with what's installed here.
     pub report_dir: Option<PathBuf>,
     /// A policy published centrally: fetched on each check and used from the next start (and

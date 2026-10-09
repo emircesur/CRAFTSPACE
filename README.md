@@ -31,7 +31,17 @@ place to install them, keep them up to date, and get to your files.
   if anything is missing or changed.
 - **Fonts & add-ons**: installs the [craft-fonts](https://github.com/storytold/craft-fonts)
   families (Japanese, Chinese, Arabic) for your user account, checksum-verified, so every app can
-  use them. Preset packs install into an app's presets folder once any are published.
+  use them. Add-ons (palettes, LUT looks, LightCraft presets, PhotoCraft plug-ins, SoundCraft
+  audio plug-ins) install where each app finds them, from the
+  [CraftSpace add-on registry](addons/README.md) and community stores such as the
+  [ArtCraft Store](https://github.com/akkk09/artcraft-store). Only CraftSpace's own packs are
+  marked **checked**; everything else says **not checked for security** and asks first.
+  Anyone can [submit an add-on](addons/README.md#submitting-an-add-on).
+- **Workspace sync**: save an app's workspaces, layouts, keyboard shortcuts, preferences and
+  presets to a `.craftprofile` file and bring them into the app on another computer, choosing
+  which parts. Recent files, window positions, folder paths and devices stay on each computer;
+  sign-ins, API keys and digital IDs are never included. The current setup is saved first, so
+  an import can be undone.
 
 **Updates**
 - Checks GitHub on start and every few hours, from the tray / menu bar even when the window is
@@ -176,6 +186,10 @@ craftspace-cli open-file poster.psd       # open a file in the app that handles 
 craftspace-cli file-types list | on [ext…] | off [ext…]
 craftspace-cli source list | enable | disable | check owner/repo | add owner/repo [--binary name]
 craftspace-cli source set photocraft someone/photocraft-fork   # or `official` to go back
+craftspace-cli addons list [--app photocraft] [--checked] | info ID | install ID [--yes] | remove ID
+craftspace-cli addons sources [add URL | remove ID | enable ID | disable ID] | repositories
+craftspace-cli profile export photocraft [--parts layouts,shortcuts] [--out FILE]
+craftspace-cli profile import FILE [--parts …] | show FILE | parts APP | backups APP
 ```
 
 For IT and classrooms:
@@ -231,6 +245,10 @@ Deploy a `policy.json` to `%ProgramData%\CraftSpace\` (Windows),
 - `policy_url` is fetched on each check and its values replace this file's (from the next start,
   or right away with `apply-policy`), so a whole room changes from one place.
 - `organization` and `support` show as a "Managed by" badge in the app's top bar.
+- `profiles` hands every computer a workspace profile (the teacher's layouts, shortcuts and
+  presets, saved with `craftspace-cli profile export`): `"apply": "once"` when it's new or
+  changed, or `"every-start"` so each class starts the same.
+- `block_unchecked_addons` allows only add-ons checked by CraftSpace.
 
 Classrooms can share a **package cache**: set a folder (Settings › IT & Classroom, or
 `craftspace-cli config package_cache '\\server\craftspace\packages'`), fill it once with

@@ -14,6 +14,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use ureq::Agent;
 
+use crate::addons;
 use crate::archive;
 use crate::catalog::{Addon, AddonKind, AppEntry, Catalog, REMOTE_CATALOG_URL};
 use crate::download::{self, Progress, ProgressEvent, Stage};
@@ -2005,6 +2006,367 @@ impl Manager {
         Ok(removed.len())
     }
 
+    // ---- add-ons (registry and stores) ---------------------------------------------------
+
+    fn addons_cache(&self) -> PathBuf {
+        self.inner.paths.cache.join("addons")
+    }
+
+    /// The CraftSpace add-on registry: the copy last fetched, else the one this build ships.
+    pub fn addon_registry(&self) -> addons::Registry {
+        std::fs::read_to_string(self.addons_cache().join("registry.json"))
+            .ok()
+            .and_then(|t| addons::parse_registry(&t, "CraftSpace").ok())
+            .unwrap_or_else(addons::Registry::builtin)
+    }
+
+    /// Every add-on store, with whether it's turned on.
+    pub fn addon_stores(&self) -> Vec<(addons::Store, bool)> {
+        let settings = self.settings().addon_stores;
+        let mut stores: Vec<(addons::Store, bool)> = self
+            .addon_registry()
+            .stores
+            .into_iter()
+            .map(|s| {
+                let on = !settings.disabled.contains(&s.id);
+                (s, on)
+            })
+            .collect();
+        for s in settings.custom {
+            if !stores.iter().any(|(x, _)| x.id == s.id) {
+                let on = !settings.disabled.contains(&s.id);
+                stores.push((s, on));
+            }
+        }
+        stores
+    }
+
+    /// Add-ons from the registry and the stores that are on (as last fetched).
+    pub fn available_addons(&self) -> Vec<addons::Addon> {
+        let mut list = self.addon_registry().addons;
+        for (store, on) in self.addon_stores() {
+            if !on {
+                continue;
+            }
+            let file = self.addons_cache().join(format!("store-{}.json", store.id));
+            if let Some(found) = std::fs::read_to_string(file).ok().and_then(|t| addons::parse_store(&store, &t).ok()) {
+                list.extend(found);
+            }
+        }
+        list
+    }
+
+    /// Fetch the registry and the stores that are on. Returns the stores that failed.
+    pub fn refresh_addons(&self) -> Vec<(String, anyhow::Error)> {
+        let mut errors = Vec::new();
+        let dir = self.addons_cache();
+        let _ = std::fs::create_dir_all(&dir);
+        let fetch = |url: &str| -> anyhow::Result<String> {
+            let mut resp = self.inner.agent.get(url).call()?;
+            check_status(url, resp.status().as_u16())?;
+            Ok(resp.body_mut().with_config().limit(16 << 20).read_to_string()?)
+        };
+        if self.settings().remote_catalog {
+            match fetch(addons::REGISTRY_URL).and_then(|t| addons::parse_registry(&t, "CraftSpace").map(|_| t)) {
+                Ok(text) => {
+                    if let Err(err) = write_atomic(&dir.join("registry.json"), text.as_bytes()) {
+                        errors.push(("CraftSpace".to_string(), err.into()));
+                    }
+                }
+                Err(err) => errors.push(("CraftSpace".to_string(), err)),
+            }
+        }
+        for (store, on) in self.addon_stores() {
+            if !on {
+                continue;
+            }
+            let result = fetch(&store.url)
+                .and_then(|t| addons::parse_store(&store, &t).map(|_| t))
+                .and_then(|t| Ok(write_atomic(&dir.join(format!("store-{}.json", store.id)), t.as_bytes())?));
+            if let Err(err) = result {
+                errors.push((store.name.clone(), err));
+            }
+        }
+        errors
+    }
+
+    pub fn installed_addons(&self) -> BTreeMap<String, addons::Installed> {
+        self.installed().addons
+    }
+
+    /// `Documents/CraftSpace Add-ons`: content the apps import themselves.
+    pub fn addon_library(&self) -> PathBuf {
+        let docs = directories::UserDirs::new()
+            .and_then(|u| u.document_dir().map(Path::to_path_buf))
+            .or_else(|| directories::BaseDirs::new().map(|b| b.home_dir().join("Documents")))
+            .unwrap_or_else(|| self.inner.paths.root.join("Documents"));
+        docs.join("CraftSpace Add-ons")
+    }
+
+    /// Install an add-on. Add-ons not checked by CraftSpace need `accept_unchecked` (the person
+    /// agreed); they still have to match their checksum when the listing has one.
+    pub fn install_addon(
+        &self,
+        id: &str,
+        accept_unchecked: bool,
+        progress: &Progress,
+    ) -> anyhow::Result<addons::Report> {
+        let _busy = self.mark_busy(&format!("addon:{id}"))?;
+        let addon = self
+            .available_addons()
+            .into_iter()
+            .find(|a| a.id == id)
+            .ok_or_else(|| anyhow::anyhow!("unknown add-on {id} (see `craftspace-cli addons list`)"))?;
+        if !addon.checked() {
+            anyhow::ensure!(
+                !self.inner.policy.block_unchecked_addons,
+                "{} allows only add-ons checked by CraftSpace on this computer",
+                self.inner.policy.organization.as_deref().unwrap_or("Your organization")
+            );
+            anyhow::ensure!(
+                accept_unchecked,
+                "{} isn't checked by CraftSpace; agree to install it anyway (--yes)",
+                addon.name
+            );
+        }
+        let platform = self.platform();
+        let file = addon
+            .file_for(platform)
+            .ok_or_else(|| anyhow::anyhow!("{} has no download for {}", addon.name, platform.display()))?
+            .clone();
+        anyhow::ensure!(file.url.starts_with("https://"), "{} isn't downloaded over https", addon.name);
+        anyhow::ensure!(file.sha256.is_some() || !addon.checked(), "{} has no checksum in the registry", addon.name);
+
+        // Download, and unpack archives.
+        let staging = self.inner.paths.downloads().join(format!("addon-{}", addons::slug(&addon.id)));
+        if staging.exists() {
+            std::fs::remove_dir_all(&staging)?;
+        }
+        std::fs::create_dir_all(&staging)?;
+        let name =
+            file.url.rsplit('/').next().unwrap_or("download").split('?').next().unwrap_or("download").to_string();
+        let download = staging.join(&name);
+        download::download(&self.inner.agent, &file.url, &download, file.sha256.as_deref(), progress)?;
+        progress.stage(Stage::Installing);
+        let lower = name.to_ascii_lowercase();
+        let content = if [".zip", ".tar.gz", ".tgz", ".tar.xz", ".txz"].iter().any(|e| lower.ends_with(e)) {
+            let dir = staging.join("content");
+            archive::unpack(&download, &dir, progress)?;
+            dir
+        } else {
+            let dir = staging.join("content");
+            std::fs::create_dir_all(&dir)?;
+            std::fs::rename(&download, dir.join(&name))?;
+            dir
+        };
+
+        let mut report = addons::Report::default();
+        let result = self.place_addon(&addon, &content, &mut report);
+        let _ = std::fs::remove_dir_all(&staging);
+        if let Err(err) = result {
+            for path in &report.written {
+                remove_any(path);
+            }
+            return Err(err);
+        }
+        anyhow::ensure!(!report.written.is_empty(), "{} has nothing for this computer", addon.name);
+        let installed = addons::Installed {
+            version: addon.version.clone(),
+            source: addon.source.clone(),
+            paths: report.written.clone(),
+            installed_at: github::now_secs(),
+        };
+        self.with_db(|db| db.addons.insert(addon.id.clone(), installed))?;
+        Ok(report)
+    }
+
+    fn place_addon(&self, addon: &addons::Addon, content: &Path, report: &mut addons::Report) -> anyhow::Result<()> {
+        let os = self.platform().os;
+        for step in &addon.install {
+            let app = self.require_app(&step.app)?;
+            let mut written = Vec::new();
+            match step.to.as_str() {
+                "clap" | "vst3" | "au" => {
+                    let Some(dir) = addons::audio_plugin_dir(&step.to, os) else { continue };
+                    let ext = if step.to == "au" { "component" } else { step.to.as_str() };
+                    for bundle in addons::bundles(content, ext) {
+                        let dest = dir.join(bundle.file_name().expect("a bundle has a name"));
+                        addons::copy_any(&bundle, &dest)?;
+                        written.push(dest);
+                    }
+                    if !written.is_empty() {
+                        report.notes.push(format!(
+                            "{}: {} plug-ins in {}",
+                            app.name,
+                            step.to.to_uppercase(),
+                            dir.display()
+                        ));
+                    }
+                }
+                "plugins" => {
+                    let dir = self.plugin_folder(&app, report)?;
+                    for (rel, src) in addons::matching_files(content, &step.files) {
+                        let name = Path::new(&rel).file_name().expect("a file has a name").to_owned();
+                        let dest = dir.join(name);
+                        addons::copy_any(&src, &dest)?;
+                        written.push(dest);
+                    }
+                    if !written.is_empty() {
+                        report.notes.push(format!("{}: loads them the next time it starts", app.name));
+                    }
+                }
+                "library" => {
+                    let dir = self.addon_library().join(addons::safe_name(&addon.name));
+                    for (rel, src) in addons::matching_files(content, &step.files) {
+                        let dest = dir.join(&rel);
+                        if !dest.exists() {
+                            addons::copy_any(&src, &dest)?;
+                        }
+                        written.push(dest);
+                    }
+                    if step.open && self.installed_app(&app.id).is_some() && !written.is_empty() {
+                        match self.launch(&app.id, &written) {
+                            Ok(()) => report.notes.push(format!("{}: opened them so it imports them", app.name)),
+                            Err(err) => log::warn!("couldn't open {} in {}: {err:#}", addon.name, app.name),
+                        }
+                    }
+                    if !written.is_empty() {
+                        report.notes.push(match &step.hint {
+                            Some(hint) => format!("{}: {hint} (files in {})", app.name, dir.display()),
+                            None => format!("{}: files in {}", app.name, dir.display()),
+                        });
+                    }
+                }
+                to => {
+                    let Some(rest) = to.strip_prefix("app:") else {
+                        anyhow::bail!("{}: unknown place {to}", addon.name)
+                    };
+                    let (root_key, sub) = rest.split_once('/').unwrap_or((rest, ""));
+                    let (spec, ctx, _) = self.profile_target(&app.id)?;
+                    let root = spec
+                        .roots
+                        .iter()
+                        .find(|r| r.key == root_key)
+                        .and_then(|r| profiles::root_dir(r, &ctx))
+                        .ok_or_else(|| anyhow::anyhow!("{}: {} has no {root_key} folder here", addon.name, app.name))?;
+                    let dir = root.join(sub);
+                    for (rel, src) in addons::matching_files(content, &step.files) {
+                        let name = Path::new(&rel).file_name().expect("a file has a name").to_owned();
+                        let dest = dir.join(name);
+                        addons::copy_any(&src, &dest)?;
+                        written.push(dest);
+                    }
+                    if !written.is_empty() {
+                        report.notes.push(match &step.hint {
+                            Some(hint) => format!("{}: {hint}", app.name),
+                            None => format!("{}: in {}", app.name, dir.display()),
+                        });
+                    }
+                }
+            }
+            for w in written {
+                if !report.written.contains(&w) {
+                    report.written.push(w);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Where an app loads WebAssembly plug-ins from: the folder chosen in its preferences, else
+    /// CraftSpace's own folder, which is then chosen for it.
+    fn plugin_folder(&self, app: &AppEntry, report: &mut addons::Report) -> anyhow::Result<PathBuf> {
+        let ours = self.inner.paths.root.join("addons").join("plug-ins").join(&app.id);
+        let (spec, ctx, _) = self.profile_target(&app.id)?;
+        let config = spec
+            .roots
+            .iter()
+            .find(|r| r.key == "config")
+            .and_then(|r| profiles::root_dir(r, &ctx))
+            .ok_or_else(|| anyhow::anyhow!("{} has no settings folder here", app.name))?;
+        let read =
+            |file: &Path| std::fs::read(file).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+        match app.id.as_str() {
+            "photocraft" => {
+                let file = config.join("preferences.json");
+                let mut prefs = read(&file).unwrap_or_else(|| serde_json::json!({}));
+                let current = prefs
+                    .pointer("/plugIns/additionalPluginsFolder")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let used =
+                    prefs.pointer("/plugIns/useAdditionalPluginsFolder").and_then(|v| v.as_bool()).unwrap_or(false);
+                if used && !current.is_empty() {
+                    return Ok(PathBuf::from(current));
+                }
+                // PhotoCraft merges its preferences with the file when it saves, so this holds
+                // even while it's open.
+                let section = prefs
+                    .as_object_mut()
+                    .ok_or_else(|| anyhow::anyhow!("PhotoCraft's preferences aren't readable"))?
+                    .entry("plugIns")
+                    .or_insert_with(|| serde_json::json!({}));
+                section["useAdditionalPluginsFolder"] = serde_json::json!(true);
+                section["additionalPluginsFolder"] = serde_json::json!(ours.to_string_lossy());
+                std::fs::create_dir_all(&config)?;
+                write_atomic(&file, serde_json::to_vec_pretty(&prefs)?.as_slice())?;
+                report
+                    .notes
+                    .push(format!("PhotoCraft now loads plug-ins from {} (Preferences › Plug-ins)", ours.display()));
+                Ok(ours)
+            }
+            "vectorcraft" => {
+                let file = config.join("ui.json");
+                let mut ui = read(&file).unwrap_or_else(|| serde_json::json!({}));
+                let current =
+                    ui.pointer("/engine_prefs/pluginsFolder").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                if !current.trim().is_empty() {
+                    return Ok(PathBuf::from(current.trim()));
+                }
+                anyhow::ensure!(
+                    !self.is_running("vectorcraft"),
+                    "VectorCraft is open; close it first (it saves its settings when it quits)"
+                );
+                let map =
+                    ui.as_object_mut().ok_or_else(|| anyhow::anyhow!("VectorCraft's settings aren't readable"))?;
+                let prefs = map.entry("engine_prefs").or_insert_with(|| serde_json::json!({}));
+                if !prefs.is_object() {
+                    *prefs = serde_json::json!({});
+                }
+                prefs["pluginsFolder"] = serde_json::json!(ours.to_string_lossy());
+                std::fs::create_dir_all(&config)?;
+                write_atomic(&file, serde_json::to_vec_pretty(&ui)?.as_slice())?;
+                report.notes.push(format!(
+                    "VectorCraft now loads plug-ins from {} (Preferences › Performance & Storage)",
+                    ours.display()
+                ));
+                Ok(ours)
+            }
+            "effectcraft" => Ok(config.join("Plug-ins")),
+            _ => anyhow::bail!("{} doesn't take plug-ins", app.name),
+        }
+    }
+
+    pub fn uninstall_addon(&self, id: &str) -> anyhow::Result<usize> {
+        let _busy = self.mark_busy(&format!("addon:{id}"))?;
+        let installed =
+            self.with_db(|db| db.addons.remove(id))?.ok_or_else(|| anyhow::anyhow!("{id} isn't installed"))?;
+        let library = self.addon_library();
+        for path in &installed.paths {
+            remove_any(path);
+            // Folders the add-on made in the library, when empty.
+            let mut dir = path.parent();
+            while let Some(d) = dir.filter(|d| d.starts_with(&library) && *d != library.as_path()) {
+                if std::fs::remove_dir(d).is_err() {
+                    break;
+                }
+                dir = d.parent();
+            }
+        }
+        Ok(installed.paths.len())
+    }
+
     /// Install a preset pack into its app's preferences folder.
     pub fn install_pack(&self, addon_id: &str, progress: &Progress) -> anyhow::Result<usize> {
         let _busy = self.mark_busy(&format!("addon:{addon_id}"))?;
@@ -2029,6 +2391,15 @@ impl Manager {
             let _ = std::fs::remove_file(f);
         }
         Ok(())
+    }
+}
+
+/// Remove a file or a folder.
+fn remove_any(path: &Path) {
+    if path.is_dir() {
+        let _ = std::fs::remove_dir_all(path);
+    } else {
+        let _ = std::fs::remove_file(path);
     }
 }
 

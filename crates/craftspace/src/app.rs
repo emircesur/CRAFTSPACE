@@ -130,6 +130,11 @@ pub enum Action {
     ReportBug(String),
     InstallFonts(Option<String>),
     RemoveFonts(Option<String>),
+    /// Install an add-on (asks first when CraftSpace hasn't checked it).
+    InstallAddon(String),
+    /// The person agreed to an add-on CraftSpace hasn't checked.
+    InstallAddonAnyway(String),
+    RemoveAddon(String),
     ExportList,
     ImportList,
     OpenMultiInstall,
@@ -176,7 +181,7 @@ pub struct FilesState {
 
 pub struct CraftSpaceApp {
     pub manager: Manager,
-    bus: Bus,
+    pub bus: Bus,
     rx: Receiver<Msg>,
     pub palette: Palette,
     applied_theme: Option<(craftspace_core::settings::Theme, bool)>,
@@ -216,6 +221,13 @@ pub struct CraftSpaceApp {
     pub readmes: HashMap<String, Result<String, String>>,
     readme_loading: HashSet<String>,
     pub fonts: Option<Result<Vec<FontFile>, String>>,
+    /// Add-ons from the registry and stores; the page's filter; an unchecked add-on waiting for
+    /// the person to agree.
+    pub addons: Vec<craftspace_core::addons::Addon>,
+    pub addon_app: Option<String>,
+    pub addon_checked_only: bool,
+    pub confirm_addon: Option<String>,
+    pub addons_requested: bool,
     fonts_loading: bool,
     pub verify_results: HashMap<String, VerifyReport>,
     pub tours: HashMap<String, Result<craftspace_core::tour::Tour, String>>,
@@ -318,6 +330,11 @@ impl CraftSpaceApp {
             readme_loading: HashSet::new(),
             fonts: None,
             fonts_loading: false,
+            addons: Vec::new(),
+            addon_app: None,
+            addon_checked_only: false,
+            confirm_addon: None,
+            addons_requested: false,
             verify_results: HashMap::new(),
             tours: HashMap::new(),
             tour_loading: HashSet::new(),
@@ -669,6 +686,7 @@ impl CraftSpaceApp {
                     }
                     Err(err) => log::warn!("couldn't apply the new policy: {err:#}"),
                 },
+                Msg::Addons(list) => self.addons = list,
                 Msg::ProfileDone(result) => {
                     self.profile_dialog = None;
                     match result {
@@ -803,6 +821,10 @@ impl CraftSpaceApp {
         let label = match &kind {
             JobKind::InstallFonts(Some(f)) | JobKind::RemoveFonts(Some(f)) => f.clone(),
             JobKind::InstallFonts(None) | JobKind::RemoveFonts(None) => "Fonts".into(),
+            JobKind::InstallAddon(_) | JobKind::RemoveAddon => {
+                let id = key.trim_start_matches("addons:");
+                self.addons.iter().find(|a| a.id == id).map(|a| a.name.clone()).unwrap_or_else(|| id.to_string())
+            }
             _ => self.app_name(key),
         };
         let mut job = Job::new(kind, label);
@@ -1064,6 +1086,16 @@ impl CraftSpaceApp {
                 }
                 Action::AskUninstall(id) => self.confirm_uninstall = Some(id),
                 Action::AskReset(id) => self.confirm_reset = Some(id),
+                Action::InstallAddon(id) => {
+                    let checked = self.addons.iter().find(|a| a.id == id).is_some_and(|a| a.checked());
+                    if checked {
+                        self.start_job(&format!("addons:{id}"), JobKind::InstallAddon(false));
+                    } else {
+                        self.confirm_addon = Some(id);
+                    }
+                }
+                Action::InstallAddonAnyway(id) => self.start_job(&format!("addons:{id}"), JobKind::InstallAddon(true)),
+                Action::RemoveAddon(id) => self.start_job(&format!("addons:{id}"), JobKind::RemoveAddon),
                 Action::OpenProfileExport(id) => match self.manager.profile_parts(&id) {
                     Ok((parts, note)) => self.profile_dialog = Some(views::profile::Dialog::export(id, parts, note)),
                     Err(err) => self.toast(ToastKind::Error, format!("{err:#}")),
@@ -1199,7 +1231,11 @@ impl CraftSpaceApp {
                     let enabled = s.other_sources.enabled;
                     s.other_sources = self.settings.other_sources.clone();
                     s.other_sources.enabled = enabled;
-                    self.save_settings(*s)
+                    let stores_changed = s.addon_stores != self.settings.addon_stores;
+                    self.save_settings(*s);
+                    if stores_changed {
+                        worker::refresh_addons(&self.bus, &self.manager);
+                    }
                 }
                 Action::ApplySelfUpdate => {
                     if let Some(update) = self.self_update.clone() {
@@ -1650,6 +1686,10 @@ impl CraftSpaceApp {
             if modal.should_close() {
                 self.confirm_uninstall = None;
             }
+        }
+
+        if let Some(id) = self.confirm_addon.clone() {
+            views::addons::confirm(self, ctx, &id);
         }
 
         if let Some(id) = self.confirm_reset.clone() {

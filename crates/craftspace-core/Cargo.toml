@@ -19,6 +19,7 @@ hex = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tar = "0.4"
 flate2 = "1"
+lzma-rs = "0.3"
 directories = "6"
 time = { version = "0.3", features = ["serde", "parsing", "formatting", "macros"] }
 walkdir = "2"

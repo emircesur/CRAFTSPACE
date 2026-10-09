@@ -24,14 +24,18 @@ pub enum JobKind {
     Repair,
     InstallFonts(Option<String>),
     RemoveFonts(Option<String>),
+    /// An add-on from the registry or a store (key `addons:<id>`); `true` when the person agreed
+    /// to an add-on CraftSpace hasn't checked.
+    InstallAddon(bool),
+    RemoveAddon,
 }
 
 impl JobKind {
     pub fn verb(&self) -> &'static str {
         match self {
-            JobKind::Install(_) | JobKind::InstallFonts(_) => "Installing",
+            JobKind::Install(_) | JobKind::InstallFonts(_) | JobKind::InstallAddon(_) => "Installing",
             JobKind::Update => "Updating",
-            JobKind::Uninstall | JobKind::RemoveFonts(_) => "Removing",
+            JobKind::Uninstall | JobKind::RemoveFonts(_) | JobKind::RemoveAddon => "Removing",
             JobKind::Rollback => "Rolling back",
             JobKind::Repair => "Repairing",
         }
@@ -116,6 +120,8 @@ pub enum Msg {
     ProfileDone(Result<String, String>),
     /// Workspace profiles from the policy: (app id, what happened).
     PolicyProfiles(Vec<(String, Result<String, String>)>),
+    /// Add-ons from the registry and stores (after fetching them).
+    Addons(Vec<craftspace_core::addons::Addon>),
     /// The organization's central policy changed (reopen the manager).
     PolicyChanged,
     ResetDone(String, Result<String, String>),
@@ -151,6 +157,7 @@ impl Bus {
 pub fn start(bus: &Bus, manager: &Manager, key: &str, job: &Job) {
     let (manager, key, kind, cancel) = (manager.clone(), key.to_string(), job.kind.clone(), job.cancel.clone());
     let location = job.location.clone();
+    let label = job.label.clone();
     bus.spawn(&format!("job-{key}"), move |bus| {
         let report = {
             let bus = bus.clone();
@@ -158,7 +165,7 @@ pub fn start(bus: &Bus, manager: &Manager, key: &str, job: &Job) {
             move |event: ProgressEvent| bus.send(Msg::Progress { key: key.clone(), event })
         };
         let progress = Progress { report: &report, cancel: &cancel };
-        let name = manager.app(&key).map(|a| a.name).unwrap_or_else(|| key.clone());
+        let name = manager.app(&key).map(|a| a.name).unwrap_or_else(|| label.clone());
         let saved = |r: &craftspace_core::state::InstalledApp| match (r.current.delta_downloaded, r.current.size_bytes)
         {
             (Some(d), Some(total)) if total > d => {
@@ -194,6 +201,19 @@ pub fn start(bus: &Bus, manager: &Manager, key: &str, job: &Job) {
                     )
                 })
             }
+            JobKind::InstallAddon(accept) => {
+                let id = key.trim_start_matches("addons:");
+                manager.install_addon(id, *accept, &progress).map(|r| {
+                    let mut text = format!("{name} is installed");
+                    if let Some(note) = r.notes.last() {
+                        text.push_str(&format!(". {note}"));
+                    }
+                    text
+                })
+            }
+            JobKind::RemoveAddon => {
+                manager.uninstall_addon(key.trim_start_matches("addons:")).map(|_| format!("{name} was removed"))
+            }
             JobKind::RemoveFonts(family) => manager
                 .uninstall_fonts(family.as_deref())
                 .map(|n| format!("Removed {n} font file{}", if n == 1 { "" } else { "s" })),
@@ -217,6 +237,10 @@ pub fn refresh(bus: &Bus, manager: &Manager, force: bool, manual: bool) {
         if let Err(err) = manager.refresh_catalog() {
             log::info!("using the built-in app list: {err:#}");
         }
+        for (source, err) in manager.refresh_addons() {
+            log::info!("couldn't refresh add-ons from {source}: {err:#}");
+        }
+        bus.send(Msg::Addons(manager.available_addons()));
         match manager.refresh_policy() {
             Ok(Some(_)) => bus.send(Msg::PolicyChanged),
             Ok(None) => {}
@@ -299,6 +323,23 @@ pub fn verify(bus: &Bus, manager: &Manager, id: &str) {
         let result = manager.verify(&id).map_err(|e| format!("{e:#}"));
         bus.send(Msg::Verified(id, result));
     });
+}
+
+/// Fetch the registry and the stores, then show the add-ons.
+pub fn refresh_addons(bus: &Bus, manager: &Manager) {
+    let manager = manager.clone();
+    bus.spawn("addons", move |bus| {
+        for (source, err) in manager.refresh_addons() {
+            log::info!("couldn't refresh add-ons from {source}: {err:#}");
+        }
+        bus.send(Msg::Addons(manager.available_addons()));
+    });
+}
+
+/// Add-ons as last fetched (quick, from the cache).
+pub fn load_addons(bus: &Bus, manager: &Manager) {
+    let manager = manager.clone();
+    bus.spawn("addons", move |bus| bus.send(Msg::Addons(manager.available_addons())));
 }
 
 pub fn export_profile(

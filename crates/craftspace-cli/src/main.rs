@@ -156,6 +156,12 @@ enum Command {
         #[arg(long, short)]
         yes: bool,
     },
+    /// Add-ons: presets, palettes, LUTs and plug-ins from the CraftSpace registry and add-on
+    /// stores.
+    Addons {
+        #[command(subcommand)]
+        action: AddonAction,
+    },
     /// Workspace sync: an app's layouts, shortcuts, preferences and presets as one file, for
     /// another computer or a whole classroom.
     Profile {
@@ -228,6 +234,55 @@ enum PolicyAction {
     Check { file: PathBuf },
     /// Fetch the centrally published policy (policy_url) now.
     Refresh,
+}
+
+#[derive(Subcommand)]
+enum AddonAction {
+    /// Show the add-ons (checked by CraftSpace or not), optionally for one app.
+    List {
+        #[arg(long)]
+        app: Option<String>,
+        /// Only add-ons checked by CraftSpace.
+        #[arg(long)]
+        checked: bool,
+    },
+    /// Show one add-on: what it is, where it comes from and where it goes.
+    Info { id: String },
+    /// Install an add-on. Add-ons not checked by CraftSpace ask first (or take --yes).
+    Install {
+        ids: Vec<String>,
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// Remove an add-on's files.
+    Remove { ids: Vec<String> },
+    /// The add-on stores besides the CraftSpace registry.
+    Sources {
+        #[command(subcommand)]
+        action: Option<StoreAction>,
+    },
+    /// Other plug-in sources CraftSpace lists but hasn't checked.
+    Repositories,
+}
+
+#[derive(Subcommand)]
+enum StoreAction {
+    List,
+    /// Add a store: the address of its catalog (CraftSpace registry or ArtCraft Store format).
+    Add {
+        url: String,
+        #[arg(long)]
+        name: Option<String>,
+    },
+    Remove {
+        id: String,
+    },
+    Enable {
+        id: String,
+    },
+    Disable {
+        id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -539,6 +594,9 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 Ok(None) => {}
                 Err(err) => eprintln!("warning: couldn't write the report: {err:#}"),
             }
+        }
+        Command::Addons { action } => {
+            failed += addons_command(&manager, action)?;
         }
         Command::Profile { action } => match action {
             ProfileAction::Export { app, out, parts } => {
@@ -1209,4 +1267,219 @@ fn confirm(question: &str) -> anyhow::Result<bool> {
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer)?;
     Ok(matches!(answer.trim(), "y" | "Y" | "yes" | "Yes"))
+}
+
+fn addon_line(a: &craftspace_core::addons::Addon, installed: bool) -> String {
+    format!(
+        "{:<44} {:<28} {:<16} {}{}",
+        a.id,
+        a.name,
+        if a.checked() { "checked" } else { "NOT CHECKED" },
+        a.source,
+        if installed { "  [installed]" } else { "" }
+    )
+}
+
+fn addons_command(manager: &Manager, action: AddonAction) -> anyhow::Result<u32> {
+    use craftspace_core::addons;
+    let mut failed = 0;
+    match action {
+        AddonAction::List { app, checked } => {
+            for (store, err) in manager.refresh_addons() {
+                eprintln!("warning: couldn't refresh {store}: {err:#}");
+            }
+            let installed = manager.installed_addons();
+            let app = app.map(|a| manager.app(&a).map(|e| e.id).unwrap_or(a));
+            for a in manager.available_addons() {
+                if app.as_ref().is_some_and(|id| !a.apps.contains(id)) || (checked && !a.checked()) {
+                    continue;
+                }
+                println!("{}", addon_line(&a, installed.contains_key(&a.id)));
+            }
+            println!(
+                "\nAdd-ons marked NOT CHECKED weren't reviewed by CraftSpace. Submit yours: {}",
+                addons::SUBMIT_URL
+            );
+        }
+        AddonAction::Info { id } => {
+            let a = manager
+                .available_addons()
+                .into_iter()
+                .find(|a| a.id == id)
+                .ok_or_else(|| anyhow::anyhow!("unknown add-on {id}"))?;
+            println!("{} {}", a.name, a.version.clone().unwrap_or_default());
+            println!("{}", a.description);
+            println!("Kind:    {}", a.kind.label());
+            println!(
+                "For:     {}",
+                a.apps
+                    .iter()
+                    .map(|id| manager.app(id).map(|e| e.name).unwrap_or(id.clone()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            if let Some(author) = &a.author {
+                println!("Author:  {author}");
+            }
+            if let Some(license) = &a.license {
+                println!("License: {license}");
+            }
+            println!("Source:  {}", a.source);
+            println!(
+                "Checked: {}",
+                if a.checked() { "yes, by CraftSpace" } else { "no: CraftSpace hasn't reviewed it for security" }
+            );
+            match a.file_for(manager.platform()) {
+                Some(f) => println!(
+                    "Download: {}\n          {}",
+                    f.url,
+                    f.sha256
+                        .as_deref()
+                        .map(|s| format!("SHA-256 {s}"))
+                        .unwrap_or_else(|| "no checksum published".into())
+                ),
+                None => println!("Download: none for {}", manager.platform().display()),
+            }
+            if let Some(home) = &a.homepage {
+                println!("More:    {home}");
+            }
+        }
+        AddonAction::Install { ids, yes } => {
+            anyhow::ensure!(!ids.is_empty(), "name the add-ons to install (see `craftspace-cli addons list`)");
+            let list = manager.available_addons();
+            for id in ids {
+                let Some(a) = list.iter().find(|a| a.id == id) else {
+                    eprintln!("error: unknown add-on {id}");
+                    failed += 1;
+                    continue;
+                };
+                let mut accept = yes;
+                if !a.checked() && !yes {
+                    if !std::io::stdin().is_terminal() {
+                        eprintln!("error: {} isn't checked by CraftSpace; pass --yes to install it anyway", a.name);
+                        failed += 1;
+                        continue;
+                    }
+                    let checksum = match a.file_for(manager.platform()).and_then(|f| f.sha256.as_ref()) {
+                        Some(_) => {
+                            "Its download is checked against a pinned checksum, but its code hasn't been reviewed."
+                        }
+                        None => "Its source publishes no checksum, so CraftSpace can't tell if the file was changed.",
+                    };
+                    eprint!(
+                        "{} comes from {} and isn't checked by CraftSpace. {checksum} Install it anyway? [y/N] ",
+                        a.name, a.source
+                    );
+                    let mut answer = String::new();
+                    std::io::stdin().read_line(&mut answer)?;
+                    accept = answer.trim().eq_ignore_ascii_case("y");
+                    if !accept {
+                        continue;
+                    }
+                }
+                match with_progress(&a.name, |p| manager.install_addon(&a.id, accept, p)) {
+                    Ok(report) => {
+                        say!(
+                            "Installed {} ({} file{}).",
+                            a.name,
+                            report.written.len(),
+                            if report.written.len() == 1 { "" } else { "s" }
+                        );
+                        for note in report.notes {
+                            say!("  {note}");
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("error: {}: {err:#}", a.name);
+                        failed += 1;
+                    }
+                }
+            }
+        }
+        AddonAction::Remove { ids } => {
+            for id in ids {
+                match manager.uninstall_addon(&id) {
+                    Ok(n) => say!("Removed {id} ({n} file{}).", if n == 1 { "" } else { "s" }),
+                    Err(err) => {
+                        eprintln!("error: {id}: {err:#}");
+                        failed += 1;
+                    }
+                }
+            }
+        }
+        AddonAction::Sources { action } => match action.unwrap_or(StoreAction::List) {
+            StoreAction::List => {
+                println!("{:<24} {:<5} {}", "CraftSpace registry", "on", addons::REGISTRY_URL);
+                for (store, on) in manager.addon_stores() {
+                    println!(
+                        "{:<24} {:<5} {}  (id: {}, not checked by CraftSpace)",
+                        store.name,
+                        if on { "on" } else { "off" },
+                        store.url,
+                        store.id
+                    );
+                }
+            }
+            StoreAction::Add { url, name } => {
+                anyhow::ensure!(url.starts_with("https://"), "a store's address must start with https://");
+                let host = url.trim_start_matches("https://").split('/').next().unwrap_or("store").to_string();
+                let name = name.unwrap_or(host);
+                let id = addons::slug(&name.to_ascii_lowercase());
+                let mut settings = manager.settings();
+                settings.addon_stores.custom.retain(|s| s.id != id);
+                settings.addon_stores.custom.push(addons::Store {
+                    id: id.clone(),
+                    name: name.clone(),
+                    url,
+                    homepage: None,
+                    description: String::new(),
+                });
+                manager.set_settings(settings)?;
+                for (store, err) in manager.refresh_addons() {
+                    if store == name {
+                        eprintln!("warning: {name}: {err:#}");
+                    }
+                }
+                say!("Added {name} (id: {id}). Its add-ons are shown as not checked by CraftSpace.");
+            }
+            StoreAction::Remove { id } => {
+                let mut settings = manager.settings();
+                let before = settings.addon_stores.custom.len();
+                settings.addon_stores.custom.retain(|s| s.id != id);
+                anyhow::ensure!(
+                    settings.addon_stores.custom.len() < before,
+                    "{id} isn't a store you added (use `disable` for suggested ones)"
+                );
+                manager.set_settings(settings)?;
+                say!("Removed {id}.");
+            }
+            StoreAction::Enable { id } => {
+                let mut settings = manager.settings();
+                settings.addon_stores.disabled.retain(|s| *s != id);
+                manager.set_settings(settings)?;
+                say!("{id} is on.");
+            }
+            StoreAction::Disable { id } => {
+                anyhow::ensure!(
+                    manager.addon_stores().iter().any(|(s, _)| s.id == id),
+                    "no store {id} (see `craftspace-cli addons sources`)"
+                );
+                let mut settings = manager.settings();
+                if !settings.addon_stores.disabled.contains(&id) {
+                    settings.addon_stores.disabled.push(id.clone());
+                }
+                manager.set_settings(settings)?;
+                say!("{id} is off.");
+            }
+        },
+        AddonAction::Repositories => {
+            println!(
+                "Other plug-in sources. CraftSpace doesn't install from these and hasn't checked them for security:\n"
+            );
+            for r in manager.addon_registry().repositories {
+                println!("{}  ({})\n  {}\n  {}\n", r.name, r.apps.join(", "), r.description, r.url);
+            }
+        }
+    }
+    Ok(failed)
 }

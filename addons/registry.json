@@ -1,0 +1,414 @@
+{
+  "format": "craftspace-addons",
+  "version": 1,
+  "addons": [
+    {
+      "id": "craftspace-palettes",
+      "name": "CraftSpace Palettes",
+      "kind": "pack",
+      "version": "1",
+      "author": "CraftSpace",
+      "license": "CC0-1.0",
+      "trust": "checked",
+      "description": "Seven colour palettes: a 14-hue spectrum in six tones, neutrals, pastels, earth, ocean, skin tones and web-safe colours.",
+      "apps": [
+        "vectorcraft",
+        "photocraft",
+        "designcraft"
+      ],
+      "tags": [
+        "swatches",
+        "palettes",
+        "colour"
+      ],
+      "homepage": "https://github.com/emircesur/CRAFTSPACE/tree/main/addons",
+      "files": [
+        {
+          "url": "https://raw.githubusercontent.com/emircesur/CRAFTSPACE/main/addons/packs/craftspace-palettes-1.zip",
+          "sha256": "e1793e2f79ef5fe8d30a4a210ff04af5d90fee24e1f00df7ccb4f57834452ecb"
+        }
+      ],
+      "install": [
+        {
+          "app": "vectorcraft",
+          "to": "app:config/Swatches",
+          "files": [
+            "GIMP palettes/*.gpl"
+          ],
+          "hint": "In VectorCraft they're in the Swatches panel under User Defined."
+        },
+        {
+          "app": "photocraft",
+          "to": "library",
+          "files": [
+            "Photoshop swatches/*.aco"
+          ],
+          "open": true,
+          "hint": "PhotoCraft adds them to its Swatches panel when they open in it."
+        },
+        {
+          "app": "designcraft",
+          "to": "library",
+          "files": [
+            "Adobe swatch exchange/*.ase"
+          ],
+          "hint": "In DesignCraft: Swatches panel menu › Load Swatches…"
+        }
+      ]
+    },
+    {
+      "id": "craftspace-looks",
+      "name": "CraftSpace Looks",
+      "kind": "pack",
+      "version": "1",
+      "author": "CraftSpace",
+      "license": "CC0-1.0",
+      "trust": "checked",
+      "description": "Twelve 3D LUT looks (.cube): warm, cool, teal and orange, faded film, bleach bypass, sepia, cross process, moonlight, golden hour, vivid and two monochromes.",
+      "apps": [
+        "lightcraft",
+        "filmcraft",
+        "effectcraft",
+        "photocraft"
+      ],
+      "tags": [
+        "lut",
+        "cube",
+        "colour grading",
+        "looks"
+      ],
+      "homepage": "https://github.com/emircesur/CRAFTSPACE/tree/main/addons",
+      "files": [
+        {
+          "url": "https://raw.githubusercontent.com/emircesur/CRAFTSPACE/main/addons/packs/craftspace-looks-1.zip",
+          "sha256": "efe76f340c29a3ae2bf694e83905b6505b73913a7987ce70dd30325d1b1c83a5"
+        }
+      ],
+      "install": [
+        {
+          "app": "lightcraft",
+          "to": "library",
+          "files": [
+            "CraftSpace Looks/*.cube"
+          ],
+          "hint": "In LightCraft: File › Import Profiles & Presets…, then choose the CraftSpace Looks folder."
+        },
+        {
+          "app": "filmcraft",
+          "to": "library",
+          "files": [
+            "CraftSpace Looks/*.cube"
+          ],
+          "hint": "In FilmCraft: Lumetri Color › Creative › Look › Browse…"
+        },
+        {
+          "app": "effectcraft",
+          "to": "library",
+          "files": [
+            "CraftSpace Looks/*.cube"
+          ],
+          "hint": "In EffectCraft: Effect › Utility › Apply Color LUT."
+        },
+        {
+          "app": "photocraft",
+          "to": "library",
+          "files": [
+            "CraftSpace Looks/*.cube"
+          ],
+          "hint": "In PhotoCraft: Image › Adjustments › Color Lookup…"
+        }
+      ]
+    },
+    {
+      "id": "craftspace-lightcraft-presets",
+      "name": "CraftSpace Presets for LightCraft",
+      "kind": "pack",
+      "version": "1",
+      "author": "CraftSpace",
+      "license": "CC0-1.0",
+      "trust": "checked",
+      "description": "Sixteen develop presets in four groups: Portrait, Landscape, Street and B&W.",
+      "apps": [
+        "lightcraft"
+      ],
+      "tags": [
+        "presets",
+        "develop"
+      ],
+      "homepage": "https://github.com/emircesur/CRAFTSPACE/tree/main/addons",
+      "files": [
+        {
+          "url": "https://raw.githubusercontent.com/emircesur/CRAFTSPACE/main/addons/packs/craftspace-lightcraft-presets-1.zip",
+          "sha256": "c3c386b259a013ac812f95ea273d9a109738970c4df1d73e514880d43c6cc322"
+        }
+      ],
+      "install": [
+        {
+          "app": "lightcraft",
+          "to": "library",
+          "files": [
+            "*.lcpreset"
+          ],
+          "hint": "In LightCraft: File › Import Profiles & Presets…, then choose CraftSpace Presets.lcpreset."
+        }
+      ]
+    },
+    {
+      "id": "dexed",
+      "name": "Dexed",
+      "kind": "audio-plugin",
+      "version": "1.0.1",
+      "author": "Pascal Gauthier (asb2m10) and contributors",
+      "license": "GPL-3.0",
+      "trust": "unchecked",
+      "description": "An FM synthesizer modelled on the Yamaha DX7, with DX7 cartridge (SysEx) support. CLAP and VST3 (and Audio Units on macOS).",
+      "apps": [
+        "soundcraft"
+      ],
+      "tags": [
+        "synth",
+        "fm",
+        "instrument"
+      ],
+      "homepage": "https://github.com/asb2m10/dexed",
+      "files": [
+        {
+          "platform": "linux-x86_64",
+          "url": "https://github.com/asb2m10/dexed/releases/download/v1.0.1/Dexed-1.0.1-lnx.zip",
+          "sha256": "2bac3d0c4237e8c22c4274b6d5b59fe6329fcae72864f81b5830393eff354fc1"
+        },
+        {
+          "platform": "windows-x64",
+          "url": "https://github.com/asb2m10/dexed/releases/download/v1.0.1/Dexed-1.0.1-win.zip",
+          "sha256": "1f118445f2c5c411636bb41ddf8b456db09af74cd38f9ede8a93a01020505f05"
+        },
+        {
+          "platform": "macos",
+          "url": "https://github.com/asb2m10/dexed/releases/download/v1.0.1/Dexed-1.0.1-macOS.zip",
+          "sha256": "4269448bc1312424cafd29aff615d891bc5905ebfc54b42ce70c56b9b10dc401"
+        }
+      ],
+      "install": [
+        {
+          "app": "soundcraft",
+          "to": "clap"
+        },
+        {
+          "app": "soundcraft",
+          "to": "vst3"
+        },
+        {
+          "app": "soundcraft",
+          "to": "au"
+        }
+      ]
+    },
+    {
+      "id": "surge-xt",
+      "name": "Surge XT",
+      "kind": "audio-plugin",
+      "version": "1.3.4",
+      "author": "The Surge Synth Team",
+      "license": "GPL-3.0",
+      "trust": "unchecked",
+      "description": "A hybrid synthesizer with wavetable, FM and virtual-analog oscillators, plus Surge XT Effects. The plug-ins only: the factory sound library is a separate download from surge-synthesizer.github.io.",
+      "apps": [
+        "soundcraft"
+      ],
+      "tags": [
+        "synth",
+        "wavetable",
+        "effects",
+        "instrument"
+      ],
+      "homepage": "https://github.com/surge-synthesizer/surge",
+      "files": [
+        {
+          "platform": "linux-x86_64",
+          "url": "https://github.com/surge-synthesizer/releases-xt/releases/download/1.3.4/surge-xt-linux-1.3.4-pluginsonly.tar.gz",
+          "sha256": "dd431b75f5fa197c4bffa6ca27ca46970f0a94c834119bb1db7decdeec4c28db"
+        },
+        {
+          "platform": "windows-x64",
+          "url": "https://github.com/surge-synthesizer/releases-xt/releases/download/1.3.4/surge-xt-win64-1.3.4-pluginsonly.zip",
+          "sha256": "564e162c560af07ad4ed47fe1bfcd827cf97a575de30d06c48249aad2e7c35e6"
+        },
+        {
+          "platform": "macos",
+          "url": "https://github.com/surge-synthesizer/releases-xt/releases/download/1.3.4/surge-xt-macos-1.3.4-pluginsonly.zip",
+          "sha256": "37d8d809693adc86587b7bc75a2384fc4e905f259aa9b9a21777749d36fbf8aa"
+        }
+      ],
+      "install": [
+        {
+          "app": "soundcraft",
+          "to": "clap"
+        },
+        {
+          "app": "soundcraft",
+          "to": "vst3"
+        },
+        {
+          "app": "soundcraft",
+          "to": "au"
+        }
+      ]
+    },
+    {
+      "id": "six-sines",
+      "name": "Six Sines",
+      "kind": "audio-plugin",
+      "version": "1.2.1",
+      "author": "Paul Walker (baconpaul)",
+      "license": "GPL-3.0",
+      "trust": "unchecked",
+      "description": "A small synthesizer built around audio-rate modulation of six sine-wave operators. CLAP and VST3.",
+      "apps": [
+        "soundcraft"
+      ],
+      "tags": [
+        "synth",
+        "fm",
+        "instrument"
+      ],
+      "homepage": "https://github.com/baconpaul/six-sines",
+      "files": [
+        {
+          "platform": "linux-x86_64",
+          "url": "https://github.com/baconpaul/six-sines/releases/download/v1.2.1/six-sines-Linux-2026-07-20-18ecb36.zip",
+          "sha256": "9b5353eebfec3e462c80ed8c0f53c965e6262bb38537518159cce71de7eace41"
+        },
+        {
+          "platform": "windows-x64",
+          "url": "https://github.com/baconpaul/six-sines/releases/download/v1.2.1/six-sines-Windows-2026-07-20-18ecb36.zip",
+          "sha256": "9f7c7fa5cb1c5e11b53c0a9306ee443149cc7bc0a109380dbbe1578f3a7b6e5d"
+        }
+      ],
+      "install": [
+        {
+          "app": "soundcraft",
+          "to": "clap"
+        },
+        {
+          "app": "soundcraft",
+          "to": "vst3"
+        },
+        {
+          "app": "soundcraft",
+          "to": "au"
+        }
+      ]
+    },
+    {
+      "id": "dragonfly-reverb",
+      "name": "Dragonfly Reverb",
+      "kind": "audio-plugin",
+      "version": "3.2.10",
+      "author": "Michael Willis and Rob van den Berg",
+      "license": "GPL-3.0",
+      "trust": "unchecked",
+      "description": "Four reverbs: Hall, Room, Plate and Early Reflections. CLAP and VST3.",
+      "apps": [
+        "soundcraft"
+      ],
+      "tags": [
+        "reverb",
+        "effects"
+      ],
+      "homepage": "https://github.com/michaelwillis/dragonfly-reverb",
+      "files": [
+        {
+          "platform": "linux-x86_64",
+          "url": "https://github.com/michaelwillis/dragonfly-reverb/releases/download/3.2.10/dragonfly-reverb-3.2.10-linux-x86_64.tar.xz",
+          "sha256": "59f1593120de82e31dd194e2ab1536af14fec2b3ec6ec45abf6d9c8ac02ef430"
+        },
+        {
+          "platform": "windows-x64",
+          "url": "https://github.com/michaelwillis/dragonfly-reverb/releases/download/3.2.10/dragonfly-reverb-3.2.10-win64.zip",
+          "sha256": "ca5f35f9dcd9a33f06490d3c92f04061a1a798cb81257d5ca5851bdda0824c66"
+        }
+      ],
+      "install": [
+        {
+          "app": "soundcraft",
+          "to": "clap"
+        },
+        {
+          "app": "soundcraft",
+          "to": "vst3"
+        },
+        {
+          "app": "soundcraft",
+          "to": "au"
+        }
+      ]
+    }
+  ],
+  "stores": [
+    {
+      "id": "artcraft-store",
+      "name": "ArtCraft Store",
+      "url": "https://akkk09.github.io/artcraft-store/catalog.json",
+      "homepage": "https://github.com/akkk09/artcraft-store",
+      "description": "A community catalog of PhotoCraft plug-ins (sandboxed WebAssembly filters). Its files have no checksums, and CraftSpace hasn't reviewed them."
+    }
+  ],
+  "repositories": [
+    {
+      "name": "ArtCraft Store",
+      "url": "https://github.com/akkk09/artcraft-store",
+      "apps": [
+        "photocraft"
+      ],
+      "description": "Community PhotoCraft plug-ins (WebAssembly filters)."
+    },
+    {
+      "name": "Airwindows Consolidated",
+      "url": "https://github.com/baconpaul/airwin2rack",
+      "apps": [
+        "soundcraft"
+      ],
+      "description": "Hundreds of Airwindows effects in one CLAP/VST3/AU plug-in (MIT)."
+    },
+    {
+      "name": "LSP Plugins",
+      "url": "https://github.com/lsp-plugins/lsp-plugins",
+      "apps": [
+        "soundcraft"
+      ],
+      "description": "Linux Studio Plugins: equalizers, compressors, analyzers (LGPL)."
+    },
+    {
+      "name": "OB-Xf",
+      "url": "https://github.com/surge-synthesizer/OB-Xf",
+      "apps": [
+        "soundcraft"
+      ],
+      "description": "A virtual-analog synthesizer from the Surge Synth Team (GPL)."
+    },
+    {
+      "name": "Odin 2",
+      "url": "https://github.com/TheWaveWarden/odin2",
+      "apps": [
+        "soundcraft"
+      ],
+      "description": "A 24-voice polyphonic synthesizer (GPL)."
+    },
+    {
+      "name": "Cardinal",
+      "url": "https://github.com/DISTRHO/Cardinal",
+      "apps": [
+        "soundcraft"
+      ],
+      "description": "A modular synthesizer plug-in based on VCV Rack (GPL)."
+    },
+    {
+      "name": "ChowDSP plug-ins",
+      "url": "https://github.com/Chowdhury-DSP",
+      "apps": [
+        "soundcraft"
+      ],
+      "description": "Analog-modelling effects such as CHOW Tape Model (BSD/GPL)."
+    }
+  ]
+}

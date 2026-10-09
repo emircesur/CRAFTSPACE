@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::download::Progress;
 
-/// Unpack `archive` (a `.zip` or `.tar.gz`) so its contents end up directly in `dest`.
+/// Unpack `archive` (a `.zip`, `.tar.gz` or `.tar.xz`) so its contents end up directly in `dest`.
 ///
 /// Release archives wrap everything in one folder (`photocraft-0.5.0-linux-x86_64/…`); that
 /// folder is stripped. `dest` must not exist yet. Unpacking happens in a sibling staging folder
@@ -28,6 +28,11 @@ pub fn unpack(archive: &Path, dest: &Path, progress: &Progress) -> anyhow::Resul
             unpack_zip(archive, &staging, progress)?;
         } else if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
             unpack_tar_gz(archive, &staging, progress)?;
+        } else if name.ends_with(".tar.xz") || name.ends_with(".txz") {
+            let mut tar = Vec::new();
+            lzma_rs::xz_decompress(&mut BufReader::new(File::open(archive)?), &mut tar)
+                .map_err(|e| anyhow::anyhow!("{} isn't a valid .tar.xz: {e:?}", archive.display()))?;
+            unpack_tar(tar::Archive::new(std::io::Cursor::new(tar)), &staging, progress)?;
         } else {
             anyhow::bail!("don't know how to unpack {}", archive.display());
         }
@@ -71,7 +76,10 @@ fn unpack_zip(archive: &Path, into: &Path, progress: &Progress) -> anyhow::Resul
 
 fn unpack_tar_gz(archive: &Path, into: &Path, progress: &Progress) -> anyhow::Result<()> {
     let gz = flate2::read::GzDecoder::new(BufReader::new(File::open(archive)?));
-    let mut tar = tar::Archive::new(gz);
+    unpack_tar(tar::Archive::new(gz), into, progress)
+}
+
+fn unpack_tar<R: std::io::Read>(mut tar: tar::Archive<R>, into: &Path, progress: &Progress) -> anyhow::Result<()> {
     tar.set_preserve_permissions(true);
     tar.set_overwrite(true);
     for entry in tar.entries()? {
