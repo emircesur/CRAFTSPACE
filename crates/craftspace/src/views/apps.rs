@@ -432,6 +432,7 @@ pub fn main_button(app: &mut CraftSpaceApp, ui: &mut Ui, s: &AppState) {
 pub fn more_menu(app: &mut CraftSpaceApp, ui: &mut Ui, s: &AppState) {
     let id = s.app.id.clone();
     let busy = app.jobs.contains_key(&id);
+    let managed = app.managed();
     let button = theme::icon_button(ui, &app.palette, theme::Icon::More, 28.0).on_hover_text("More");
     egui::Popup::menu(&button).show(|ui| {
         ui.set_min_width(200.0);
@@ -442,7 +443,7 @@ pub fn more_menu(app: &mut CraftSpaceApp, ui: &mut Ui, s: &AppState) {
             if s.update_available && ui.add_enabled(!busy, egui::Button::new("Update")).clicked() {
                 app.actions.push(Action::Update(id.clone()));
             }
-            if let Some(prev) = &installed.previous {
+            if let Some(prev) = installed.previous.as_ref().filter(|_| !managed) {
                 if ui.add_enabled(!busy, egui::Button::new(format!("Roll back to {}", prev.version))).clicked() {
                     app.actions.push(Action::Rollback(id.clone()));
                 }
@@ -459,10 +460,21 @@ pub fn more_menu(app: &mut CraftSpaceApp, ui: &mut Ui, s: &AppState) {
             }
         }
         if s.installed.is_none()
+            && !managed
             && s.installable.as_ref().is_some_and(|(_, kind)| kind.is_managed())
             && ui.add_enabled(!busy, egui::Button::new("Install in a folder…")).clicked()
         {
             app.actions.push(Action::InstallTo(id.clone()));
+        }
+        if app.settings.other_sources.enabled {
+            if s.app.custom {
+                if s.installed.is_none() && ui.button("Remove from CraftSpace").clicked() {
+                    app.actions.push(Action::Source(crate::worker::SourceOp::Remove { id: id.clone() }));
+                }
+            } else if ui.button("Update source…").on_hover_text("Update it from a fork, a mirror or a backup").clicked()
+            {
+                app.actions.push(Action::OpenSource(crate::views::sources::Target::App(id.clone())));
+            }
         }
         if s.installed.is_some() && ui.add_enabled(!busy, egui::Button::new("Verify and repair")).clicked() {
             app.actions.push(Action::VerifyAndRepair(id.clone()));
@@ -483,7 +495,17 @@ pub fn more_menu(app: &mut CraftSpaceApp, ui: &mut Ui, s: &AppState) {
         }
         if s.installed.is_some() {
             ui.separator();
-            if ui.add_enabled(!busy, egui::Button::new(RichText::new("Uninstall…").color(app.palette.bad))).clicked()
+            if ui
+                .add_enabled(!busy, egui::Button::new("Reset settings…"))
+                .on_hover_text("Start the app with fresh settings; the old ones are kept in a backup folder")
+                .clicked()
+            {
+                app.actions.push(Action::AskReset(id.clone()));
+            }
+            if !managed
+                && ui
+                    .add_enabled(!busy, egui::Button::new(RichText::new("Uninstall…").color(app.palette.bad)))
+                    .clicked()
             {
                 app.actions.push(Action::AskUninstall(id.clone()));
             }
@@ -637,6 +659,17 @@ fn detail(app: &mut CraftSpaceApp, ui: &mut Ui, id: &str) {
                     theme::chip(ui, &format!("Like {like}"), p.weak);
                 }
                 theme::chip(ui, "Open source", p.good);
+                if s.app.custom {
+                    ui.scope(|ui| theme::chip(ui, "From GitHub", p.accent))
+                        .response
+                        .on_hover_text(format!("github.com/{}", s.app.repo));
+                } else if let Some(repo) =
+                    app.settings.other_sources.overrides.get(&s.app.id).filter(|_| app.settings.other_sources.enabled)
+                {
+                    ui.scope(|ui| theme::chip(ui, &format!("Updates from {repo}"), p.warn)).response.on_hover_text(
+                        "Updated from this repository instead of the official one (Settings › Other sources)",
+                    );
+                }
                 if let Some(external) = s.installed.as_ref().and_then(|i| i.current.external.as_ref()) {
                     let (label, tip) = match &external.flatpak {
                         Some(id) => (
@@ -754,19 +787,27 @@ fn overview(app: &mut CraftSpaceApp, ui: &mut Ui, s: &AppState) {
             ui.label(RichText::new("Updates").color(p.weak));
             let mut channel = s.channel.clone();
             let installed_version = s.installed_version().cloned();
-            egui::ComboBox::from_id_salt(("channel", id)).selected_text(channel.label()).show_ui(ui, |ui| {
-                ui.selectable_value(&mut channel, Channel::Default, "Default (as in Settings)");
-                ui.selectable_value(&mut channel, Channel::Stable, "Stable releases");
-                ui.selectable_value(&mut channel, Channel::Prerelease, "Pre-releases too");
-                if let Some(v) = installed_version {
-                    let label = format!("Stay on {v}");
-                    ui.selectable_value(&mut channel, Channel::Pinned(v), label);
+            if app.manager.policy().locks_channel(id) || app.managed() {
+                ui.label(match &channel {
+                    Channel::Pinned(v) => format!("Kept on {v} by {}", app.organization()),
+                    other => format!("{} (set by {})", other.label(), app.organization()),
+                });
+                ui.end_row();
+            } else {
+                egui::ComboBox::from_id_salt(("channel", id)).selected_text(channel.label()).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut channel, Channel::Default, "Default (as in Settings)");
+                    ui.selectable_value(&mut channel, Channel::Stable, "Stable releases");
+                    ui.selectable_value(&mut channel, Channel::Prerelease, "Pre-releases too");
+                    if let Some(v) = installed_version {
+                        let label = format!("Stay on {v}");
+                        ui.selectable_value(&mut channel, Channel::Pinned(v), label);
+                    }
+                });
+                if channel != s.channel {
+                    app.actions.push(Action::SetChannel(id.to_string(), channel));
                 }
-            });
-            if channel != s.channel {
-                app.actions.push(Action::SetChannel(id.to_string(), channel));
+                ui.end_row();
             }
-            ui.end_row();
             if !s.app.extensions.is_empty() {
                 row(ui, "Opens", s.app.extensions.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join("  "));
             }

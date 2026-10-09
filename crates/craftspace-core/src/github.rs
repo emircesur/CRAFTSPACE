@@ -240,6 +240,19 @@ impl GitHub {
         let tag = tag_from_download_url(location)
             .ok_or_else(|| anyhow::anyhow!("could not find a tag in redirect {location}"))?;
 
+        let release = self.release_by_tag(repo, &tag)?;
+        Ok(ReleaseList {
+            repo: repo.into(),
+            releases: vec![release],
+            source: Source::LatestRedirect,
+            fetched_at: now_secs(),
+            etag: None,
+        })
+    }
+
+    /// A release from its `SHA256SUMS.txt` alone (no API needed): its files and checksums.
+    fn release_from_sums(&self, repo: &str, tag: &str) -> anyhow::Result<Release> {
+        let tag = tag.to_string();
         let sums_url = download_url(&self.web_base, repo, &tag, SUMS_FILE);
         let mut resp = self.agent.get(&sums_url).call()?;
         check_status(&sums_url, resp.status().as_u16())?;
@@ -257,7 +270,7 @@ impl GitHub {
             .collect();
         assets.sort_by(|a, b| a.name.cmp(&b.name));
         let version = version::parse_tag(&tag);
-        let release = Release {
+        Ok(Release {
             prerelease: version.as_ref().is_some_and(|v| !v.pre.is_empty()),
             name: tag.clone(),
             html_url: format!("{}/{repo}/releases/tag/{tag}", self.web_base),
@@ -266,13 +279,39 @@ impl GitHub {
             published_at: None,
             body: String::new(),
             assets,
-        };
-        Ok(ReleaseList {
-            repo: repo.into(),
-            releases: vec![release],
-            source: Source::LatestRedirect,
-            fetched_at: now_secs(),
-            etag: None,
+        })
+    }
+
+    /// A release from its page on github.com (no API needed), for repositories that publish no
+    /// `SHA256SUMS.txt`: its files, with checksums filled in later from sidecar files.
+    fn release_from_page(&self, repo: &str, tag: &str) -> anyhow::Result<Release> {
+        let page = format!("{}/{repo}/releases/expanded_assets/{tag}", self.web_base);
+        let html = self.fetch_text(&page)?;
+        let names = asset_links(&html, repo, tag);
+        anyhow::ensure!(!names.is_empty(), "{page} lists no files");
+        let mut assets: Vec<Asset> = names
+            .into_iter()
+            .map(|name| Asset { url: download_url(&self.web_base, repo, tag, &name), name, size: None, sha256: None })
+            .collect();
+        assets.sort_by(|a, b| a.name.cmp(&b.name));
+        let version = version::parse_tag(tag);
+        Ok(Release {
+            prerelease: version.as_ref().is_some_and(|v| !v.pre.is_empty()),
+            name: tag.to_string(),
+            html_url: format!("{}/{repo}/releases/tag/{tag}", self.web_base),
+            tag: tag.to_string(),
+            version,
+            published_at: None,
+            body: String::new(),
+            assets,
+        })
+    }
+
+    /// One release by its tag, found without the API, for installing an older version while the
+    /// API is rate limited.
+    pub fn release_by_tag(&self, repo: &str, tag: &str) -> anyhow::Result<Release> {
+        self.release_from_sums(repo, tag).or_else(|sums_err| {
+            self.release_from_page(repo, tag).map_err(|err| anyhow::anyhow!("{sums_err:#}, and {err:#}"))
         })
     }
 
@@ -281,10 +320,13 @@ impl GitHub {
         if release.assets.iter().all(|a| a.sha256.is_some()) {
             return Ok(());
         }
-        let Some(sums_asset) = release.asset(SUMS_FILE).cloned() else { return Ok(()) };
-        let mut resp = self.agent.get(&sums_asset.url).call()?;
-        check_status(&sums_asset.url, resp.status().as_u16())?;
-        let sums = parse_sums(&resp.body_mut().read_to_string()?);
+        // `SHA256SUMS.txt` (the ArtCraft apps), or another checksum list (other projects).
+        let Some(sums_asset) =
+            release.asset(SUMS_FILE).or_else(|| release.assets.iter().find(|a| is_checksum_list(&a.name)))
+        else {
+            return Ok(());
+        };
+        let sums = parse_sums(&self.fetch_text(&sums_asset.url.clone())?);
         for asset in &mut release.assets {
             if asset.sha256.is_none() {
                 asset.sha256 = sums.get(&asset.name).cloned();
@@ -292,6 +334,53 @@ impl GitHub {
         }
         Ok(())
     }
+
+    /// The checksum of one file: from a checksum list, or a `<file>.sha256` next to it (as many
+    /// projects outside ArtCraft publish).
+    pub fn fill_checksum(&self, release: &mut Release, name: &str) -> anyhow::Result<()> {
+        self.fill_checksums(release)?;
+        let Some(i) = release.assets.iter().position(|a| a.name == name) else { return Ok(()) };
+        if release.assets[i].sha256.is_some() {
+            return Ok(());
+        }
+        let sidecar = [".sha256", ".sha256sum", ".sha256.txt"]
+            .iter()
+            .find_map(|ext| release.asset(&format!("{name}{ext}")).map(|a| a.url.clone()));
+        if let Some(url) = sidecar {
+            let text = self.fetch_text(&url)?;
+            // "<hash>  <name>", or just the hash.
+            let hash = parse_sums(&text).remove(name).or_else(|| {
+                let h = text.split_whitespace().next()?.to_ascii_lowercase();
+                (h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit())).then_some(h)
+            });
+            release.assets[i].sha256 = hash;
+        }
+        Ok(())
+    }
+
+    fn fetch_text(&self, url: &str) -> anyhow::Result<String> {
+        let mut resp = self.agent.get(url).call()?;
+        check_status(url, resp.status().as_u16())?;
+        Ok(resp.body_mut().read_to_string()?)
+    }
+}
+
+/// The names of the files a release page links to (`/<repo>/releases/download/<tag>/<name>`).
+fn asset_links(html: &str, repo: &str, tag: &str) -> Vec<String> {
+    let prefix = format!("/{repo}/releases/download/{tag}/");
+    let mut names: Vec<String> = Vec::new();
+    for part in html.split("href=\"").skip(1) {
+        let Some(link) = part.split('"').next() else { continue };
+        let path = link.strip_prefix("https://github.com").unwrap_or(link);
+        // Repository names in links can differ in case from what was typed.
+        if path.len() > prefix.len() && path[..prefix.len()].eq_ignore_ascii_case(&prefix) {
+            let name = percent_decode(&path[prefix.len()..]);
+            if !name.is_empty() && !name.contains('/') && !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names
 }
 
 pub fn download_url(web_base: &str, repo: &str, tag: &str, name: &str) -> String {
@@ -325,6 +414,13 @@ fn percent_decode(s: &str) -> String {
 }
 
 /// Parse `sha256sum` output: `<hex>  <name>` or `<hex> *<name>` per line.
+/// Checksum lists projects publish under other names: `checksums.txt`, `sha256sums`,
+/// `tool_1.2.3_checksums.txt`.
+fn is_checksum_list(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n == "sha256sums" || n.ends_with("sha256sums.txt") || n.ends_with("checksums.txt") || n == "checksums.sha256"
+}
+
 pub fn parse_sums(text: &str) -> HashMap<String, String> {
     text.lines()
         .filter_map(|line| {
@@ -417,6 +513,23 @@ not a line
         assert_eq!(
             sums["photocraft-0.5.0-windows-x64-portable.zip"],
             "da0402c19aa1b65f3cde310461cc6e41d391791e6097659a34006e526fb9d9cd"
+        );
+    }
+
+    #[test]
+    fn lists_files_from_a_release_page() {
+        let html = r#"<li><a href="/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz" rel="nofollow">
+            <a href="/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz.sha256">
+            <a href="https://github.com/burntsushi/ripgrep/releases/download/15.2.0/ripgrep_15.2.0-1_amd64.deb">
+            <a href="/BurntSushi/ripgrep/archive/refs/tags/15.2.0.zip">
+            <a href="/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz">"#;
+        assert_eq!(
+            asset_links(html, "BurntSushi/ripgrep", "15.2.0"),
+            [
+                "ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz",
+                "ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz.sha256",
+                "ripgrep_15.2.0-1_amd64.deb"
+            ]
         );
     }
 

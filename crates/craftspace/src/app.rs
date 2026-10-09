@@ -73,6 +73,12 @@ pub enum Action {
     Update(String),
     UpdateAll,
     AskUninstall(String),
+    /// "Reset settings…": ask, then move the app's settings aside.
+    AskReset(String),
+    Reset(String),
+    /// Settings › IT & Classroom.
+    SaveReport,
+    FillCache,
     Uninstall(String),
     Rollback(String),
     VerifyAndRepair(String),
@@ -96,6 +102,9 @@ pub enum Action {
     Cleanup,
     TestNotification,
     OpenAbout,
+    /// Open the other-sources dialog.
+    OpenSource(views::sources::Target),
+    Source(worker::SourceOp),
     /// Start the updated CraftSpace and quit this one.
     RestartCraftSpace,
     /// The answer to "portable or installer?" (true: installer).
@@ -192,6 +201,8 @@ pub struct CraftSpaceApp {
     /// A newer CraftSpace is in place; it runs from the next start.
     pub self_update_ready: Option<semver::Version>,
     required_queued: bool,
+    /// Pinned versions queued this run (app ids).
+    pinned_queued: HashSet<String>,
 
     pub files: FilesState,
     pub articles: Vec<Article>,
@@ -209,6 +220,7 @@ pub struct CraftSpaceApp {
     pub settings: Settings,
     pub settings_draft: Option<Settings>,
     pub confirm_uninstall: Option<String>,
+    pub confirm_reset: Option<String>,
     confirm_quit: bool,
     pub md_cache: CommonMarkCache,
     pub detail_release: Option<String>,
@@ -221,6 +233,8 @@ pub struct CraftSpaceApp {
     tray_rx: Receiver<TrayCommand>,
     hidden: bool,
     pub about_open: bool,
+    /// Settings › Other sources: the add / change repository dialog.
+    pub source_dialog: Option<views::sources::Dialog>,
     /// An install waiting for the one-time "portable or installer?" answer.
     pub install_mode_pending: Option<Action>,
     /// `craftspace open <file>` for an app that isn't installed: open it once it is.
@@ -274,6 +288,7 @@ impl CraftSpaceApp {
             self_updating: false,
             self_update_ready: None,
             required_queued: false,
+            pinned_queued: Default::default(),
             files: FilesState {
                 entries: Vec::new(),
                 scanning: false,
@@ -304,6 +319,7 @@ impl CraftSpaceApp {
             settings,
             settings_draft: None,
             confirm_uninstall: None,
+            confirm_reset: None,
             confirm_quit: false,
             md_cache: CommonMarkCache::default(),
             detail_release: None,
@@ -315,6 +331,7 @@ impl CraftSpaceApp {
             hidden: false,
             pending_open: None,
             about_open: false,
+            source_dialog: None,
             install_mode_pending: None,
             hidden_without_tray: None,
             quitting: false,
@@ -462,6 +479,17 @@ impl CraftSpaceApp {
         }
     }
 
+    /// Whether the organization keeps users from uninstalling and rolling back (and this isn't an
+    /// administrator).
+    pub fn managed(&self) -> bool {
+        self.manager.policy().prevent_uninstall && !craftspace_core::platform::is_elevated()
+    }
+
+    /// Who manages this computer, for messages.
+    pub fn organization(&self) -> String {
+        self.manager.policy().organization.clone().unwrap_or_else(|| "Your organization".into())
+    }
+
     pub fn app_name(&self, key: &str) -> String {
         self.manager.app(key).map(|a| a.name).unwrap_or_else(|| key.to_string())
     }
@@ -592,6 +620,54 @@ impl CraftSpaceApp {
                         }
                     }
                 }
+                Msg::SourceChecked(result) => {
+                    if let Some(d) = self.source_dialog.as_mut() {
+                        d.checking = false;
+                        d.check = Some(result);
+                    }
+                }
+                Msg::SourceDone(result) => {
+                    match result {
+                        Ok(text) => {
+                            self.source_dialog = None;
+                            self.toast(ToastKind::Success, text);
+                        }
+                        Err(err) => {
+                            if let Some(d) = self.source_dialog.as_mut() {
+                                d.working = false;
+                                d.check = Some(Err(err.clone()));
+                            }
+                            self.toast(ToastKind::Error, err);
+                        }
+                    }
+                    self.settings = self.manager.settings();
+                    if let Some(draft) = self.settings_draft.as_mut() {
+                        draft.other_sources = self.settings.other_sources.clone();
+                    }
+                    reload = true;
+                    theme::load_icons(ctx, &self.manager, None);
+                    self.start_refresh(true, false);
+                }
+                Msg::PolicyChanged => match Manager::open_at(self.manager.paths().clone()) {
+                    Ok(manager) => {
+                        self.manager = manager;
+                        self.settings = self.manager.settings();
+                        reload = true;
+                        self.toast(
+                            ToastKind::Info,
+                            format!("{} updated how CraftSpace is set up here", self.organization()),
+                        );
+                    }
+                    Err(err) => log::warn!("couldn't apply the new policy: {err:#}"),
+                },
+                Msg::ResetDone(id, result) => match result {
+                    Ok(text) => self.announce(ctx, ToastKind::Success, text),
+                    Err(text) => self.toast(ToastKind::Error, format!("Couldn't reset {}: {text}", self.app_name(&id))),
+                },
+                Msg::CacheFilled(result) => match result {
+                    Ok(text) => self.toast(ToastKind::Success, text),
+                    Err(text) => self.toast(ToastKind::Error, format!("Couldn't fill the package cache: {text}")),
+                },
                 Msg::Adopted(found) => {
                     reload = true;
                     let names: Vec<String> = found
@@ -652,6 +728,12 @@ impl CraftSpaceApp {
                 self.start_job(&id, JobKind::Install(None));
             }
         }
+        // Apps the organization keeps on a version they aren't on yet.
+        for (id, version) in self.manager.off_pinned_version() {
+            if self.pinned_queued.insert(id.clone()) {
+                self.start_job(&id, JobKind::Install(Some(version)));
+            }
+        }
         let updates: Vec<String> =
             self.states.iter().filter(|s| s.update_available).map(|s| s.app.id.clone()).collect();
         if updates.is_empty() {
@@ -660,7 +742,20 @@ impl CraftSpaceApp {
             }
             return;
         }
-        if self.settings.auto_install_updates {
+        let window = self.manager.policy().update_window.clone().filter(|_| !self.manager.policy().may_update_now());
+        if let (true, Some(window)) = (self.settings.auto_install_updates, window) {
+            let n = updates.len();
+            self.announce(
+                ctx,
+                ToastKind::Info,
+                format!(
+                    "{n} update{} available; {} installs updates {}",
+                    if n == 1 { "" } else { "s" },
+                    self.organization(),
+                    window.describe()
+                ),
+            );
+        } else if self.settings.auto_install_updates {
             for id in updates {
                 self.request_quietly(&id, JobKind::Update);
             }
@@ -944,6 +1039,28 @@ impl CraftSpaceApp {
                     }
                 }
                 Action::AskUninstall(id) => self.confirm_uninstall = Some(id),
+                Action::AskReset(id) => self.confirm_reset = Some(id),
+                Action::Reset(id) => worker::reset_app(&self.bus, &self.manager, &id),
+                Action::SaveReport => {
+                    let report = self.manager.report();
+                    let name = format!("craftspace-report-{}.json", report["computer"].as_str().unwrap_or("computer"));
+                    if let Some(path) = rfd::FileDialog::new()
+                        .set_title("Save a status report")
+                        .set_file_name(name)
+                        .add_filter("JSON", &["json"])
+                        .save_file()
+                    {
+                        let report = serde_json::to_string_pretty(&report).unwrap_or_default();
+                        match std::fs::write(&path, report) {
+                            Ok(()) => self.toast(ToastKind::Success, format!("Saved the report to {}", path.display())),
+                            Err(err) => self.toast(ToastKind::Error, format!("Couldn't save the report: {err}")),
+                        }
+                    }
+                }
+                Action::FillCache => {
+                    self.toast(ToastKind::Info, "Downloading the installed apps into the package cache…");
+                    worker::fill_cache(&self.bus, &self.manager);
+                }
                 Action::Uninstall(id) => self.request(&id, JobKind::Uninstall),
                 Action::Rollback(id) => self.request(&id, JobKind::Rollback),
                 Action::VerifyAndRepair(id) => {
@@ -1033,6 +1150,10 @@ impl CraftSpaceApp {
                     // The Settings window doesn't edit these (its own window does, maybe while
                     // Settings is open), so keep what's saved.
                     s.files = self.settings.files.clone();
+                    // Its dialog changes the lists; Settings only turns them on or off.
+                    let enabled = s.other_sources.enabled;
+                    s.other_sources = self.settings.other_sources.clone();
+                    s.other_sources.enabled = enabled;
                     self.save_settings(*s)
                 }
                 Action::ApplySelfUpdate => {
@@ -1058,6 +1179,19 @@ impl CraftSpaceApp {
                 }
                 Action::TestNotification => worker::test_notification(&self.bus),
                 Action::OpenAbout => self.about_open = true,
+                Action::OpenSource(target) => {
+                    let current = match &target {
+                        views::sources::Target::App(id) if id == selfupdate::NAME => {
+                            self.settings.other_sources.self_repo.clone().unwrap_or_default()
+                        }
+                        views::sources::Target::App(id) => {
+                            self.settings.other_sources.overrides.get(id).cloned().unwrap_or_default()
+                        }
+                        views::sources::Target::NewApp => String::new(),
+                    };
+                    self.source_dialog = Some(views::sources::Dialog::new(target, current));
+                }
+                Action::Source(op) => worker::source_op(&self.bus, &self.manager, op),
                 Action::RestartCraftSpace => {
                     let mut cmd = std::process::Command::new(launcher_path(&self.manager));
                     if self.hidden {
@@ -1316,6 +1450,9 @@ impl CraftSpaceApp {
                 if !self.jobs.is_empty() || !self.waiting_for_close.is_empty() {
                     views::downloads::button(self, ui);
                 }
+                if self.manager.policy().is_active() {
+                    self.managed_chip(ui);
+                }
                 ui.add_space(12.0);
                 let hint = match self.tab {
                     Tab::Files => "Search files",
@@ -1329,6 +1466,65 @@ impl CraftSpaceApp {
                 );
             });
         });
+    }
+
+    /// "Managed by …" in the top bar: what the organization decides, and where to get help.
+    fn managed_chip(&mut self, ui: &mut egui::Ui) {
+        let p = self.palette;
+        let policy = self.manager.policy().clone();
+        let text = match &policy.organization {
+            Some(org) => format!("🏫 {org}"),
+            None => "🏫 Managed".into(),
+        };
+        let chip = ui
+            .add(
+                egui::Button::new(RichText::new(text).size(12.0).color(p.warn))
+                    .fill(p.warn.gamma_multiply(0.15))
+                    .corner_radius(9.0),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        let mut lines = vec![format!("{} manages CraftSpace on this computer.", self.organization())];
+        if policy.lock_settings {
+            lines.push("Settings can't be changed.".into());
+        } else if !policy.settings.is_empty() {
+            lines.push(format!("{} setting(s) are set for you.", policy.settings.len()));
+        }
+        if !policy.required_apps.is_empty() {
+            lines.push(format!("Always installed: {}.", self.names(&policy.required_apps)));
+        }
+        if !policy.pinned_versions.is_empty() {
+            let pins: Vec<String> =
+                policy.pinned_versions.iter().map(|(id, v)| format!("{} {v}", self.app_name(id))).collect();
+            lines.push(format!("Kept on: {}.", pins.join(", ")));
+        }
+        if !policy.blocked_apps.is_empty() {
+            lines.push(format!("Not available: {}.", self.names(&policy.blocked_apps)));
+        }
+        if let Some(w) = &policy.update_window {
+            lines.push(format!("Updates install {}.", w.describe()));
+        }
+        if policy.prevent_uninstall {
+            lines.push("Apps can't be uninstalled or rolled back.".into());
+        }
+        if let Some(support) = &policy.support {
+            lines.push(format!("Help: {support}"));
+        }
+        let chip = chip.on_hover_text(lines.join("\n"));
+        if chip.clicked() {
+            match policy.support.as_deref() {
+                Some(s) if s.starts_with("http://") || s.starts_with("https://") => {
+                    self.actions.push(Action::OpenUrl(s.to_string()))
+                }
+                Some(s) if s.contains('@') && !s.contains(' ') => {
+                    self.actions.push(Action::OpenUrl(format!("mailto:{s}")))
+                }
+                _ => self.actions.push(Action::OpenSettings),
+            }
+        }
+    }
+
+    fn names(&self, ids: &[String]) -> String {
+        ids.iter().map(|id| self.app_name(id)).collect::<Vec<_>>().join(", ")
     }
 
     fn toasts(&mut self, ctx: &egui::Context) {
@@ -1404,6 +1600,29 @@ impl CraftSpaceApp {
             }
         }
 
+        if let Some(id) = self.confirm_reset.clone() {
+            let name = self.app_name(&id);
+            let modal = egui::Modal::new(egui::Id::new("confirm-reset")).show(ctx, |ui| {
+                ui.set_width(420.0);
+                ui.heading(format!("Reset {name}'s settings?"));
+                ui.add_space(6.0);
+                ui.label(RichText::new(format!("{name} starts as if it were just installed: preferences, layouts and recent files are moved to a backup folder next to them, so nothing is deleted. Your documents aren't touched.")).color(p.weak));
+                ui.add_space(14.0);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if danger_button(ui, &p, "Reset").clicked() {
+                        self.actions.push(Action::Reset(id.clone()));
+                        ui.close();
+                    }
+                    if theme::pill(ui, &p, "Cancel").clicked() {
+                        ui.close();
+                    }
+                });
+            });
+            if modal.should_close() {
+                self.confirm_reset = None;
+            }
+        }
+
         if let Some((id, kind)) = self.running_prompt.clone() {
             let name = self.app_name(&id);
             let managed = self.manager.installed_app(&id).is_some_and(|i| i.current.kind.is_managed());
@@ -1474,6 +1693,7 @@ impl CraftSpaceApp {
         views::settings::window(self, ctx);
         views::files::setup_window(self, ctx);
         views::about::window(self, ctx);
+        views::sources::window(self, ctx);
         views::install_mode::window(self, ctx);
     }
 }

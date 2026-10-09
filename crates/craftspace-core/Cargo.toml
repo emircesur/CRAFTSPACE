@@ -27,10 +27,13 @@ md4 = "0.10"
 sha1 = "0.10"
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 mslnk = "0.1"
 winreg = "0.55"
-windows-sys = { version = "0.61", features = ["Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_UI_Shell"] }
+windows-sys = { version = "0.61", features = ["Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_UI_Shell", "Win32_System_SystemInformation"] }
 
 [dev-dependencies]
 tempfile = "3"

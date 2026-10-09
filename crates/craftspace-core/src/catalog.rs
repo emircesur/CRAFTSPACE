@@ -106,6 +106,9 @@ pub struct AppEntry {
     /// The app's AppStream metainfo (screenshots, description), when not at the ArtCraft path.
     #[serde(default)]
     pub metainfo: Option<String>,
+    /// Added by the user from a GitHub repository (not part of the ArtCraft catalog).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub custom: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

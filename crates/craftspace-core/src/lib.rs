@@ -19,6 +19,7 @@ pub mod paths;
 pub mod platform;
 pub mod selfupdate;
 pub mod settings;
+pub mod sources;
 pub mod state;
 pub mod version;
 

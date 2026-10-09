@@ -6,4 +6,5 @@ pub mod downloads;
 pub mod files;
 pub mod install_mode;
 pub mod settings;
+pub mod sources;
 pub mod tour;

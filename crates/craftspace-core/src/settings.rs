@@ -69,6 +69,40 @@ pub struct Settings {
     pub notifications: bool,
     /// The Files tab's optional features, offered the first time it opens.
     pub files: FilesFeatures,
+    /// Apps and update sources outside the ArtCraft catalog (off unless turned on).
+    pub other_sources: OtherSources,
+    /// A folder shared by several computers (a classroom's file share): packages are taken from
+    /// it when there, instead of downloading them again.
+    pub package_cache: Option<PathBuf>,
+    /// Also put downloaded packages into `package_cache` for the other computers.
+    pub package_cache_write: bool,
+}
+
+/// Optional: apps from any GitHub repository, and other repositories (forks, mirrors, backups)
+/// for the ArtCraft apps and for CraftSpace itself. Off by default, so CraftSpace stays an
+/// ArtCraft app manager unless someone asks for more.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OtherSources {
+    pub enabled: bool,
+    /// Apps added from GitHub repositories.
+    pub apps: Vec<CustomApp>,
+    /// ArtCraft app id → the repository to update it from instead of the official one.
+    pub overrides: BTreeMap<String, String>,
+    /// Where CraftSpace looks for its own updates instead of the official repository.
+    pub self_repo: Option<String>,
+}
+
+/// An app added from a GitHub repository.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CustomApp {
+    pub id: String,
+    pub name: String,
+    /// `owner/repo`.
+    pub repo: String,
+    /// The program's file name, when it isn't the repository's name (`rg` for ripgrep).
+    #[serde(default)]
+    pub binary: Option<String>,
 }
 
 /// Optional Files tab features (Settings › Files, and the card shown the first time).
@@ -161,6 +195,9 @@ impl Default for Settings {
             keep_running_in_tray: true,
             notifications: true,
             files: FilesFeatures::default(),
+            other_sources: OtherSources::default(),
+            package_cache: None,
+            package_cache_write: false,
         }
     }
 }

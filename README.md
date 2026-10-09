@@ -162,6 +162,22 @@ craftspace-cli report-bug photocraft
 craftspace-cli autostart on|off
 craftspace-cli config [key] [value]       # e.g. config download_limit_kbps 2048
 craftspace-cli self-update | self-install | paths | cleanup
+craftspace-cli detect                     # find apps installed without CraftSpace and adopt them
+craftspace-cli open-file poster.psd       # open a file in the app that handles it
+craftspace-cli file-types list | on [ext…] | off [ext…]
+craftspace-cli source list | enable | disable | check owner/repo | add owner/repo [--binary name]
+craftspace-cli source set photocraft someone/photocraft-fork   # or `official` to go back
+```
+
+For IT and classrooms:
+
+```text
+craftspace-cli apply-policy               # install required apps, move apps to pinned versions
+craftspace-cli policy show [--json] | check policy.json | refresh
+craftspace-cli update --scheduled         # for a scheduled task: only inside the update window
+craftspace-cli report [--json] [--out FILE] [--to-share]
+craftspace-cli cache fill [apps…] [--dir DIR] [--all-platforms] | status
+craftspace-cli reset photocraft | --all [--yes]   # fresh app settings between classes (kept as a backup)
 ```
 
 `--quiet` prints nothing but errors and runs installers without any windows. `--refresh` skips
@@ -176,18 +192,42 @@ Deploy a `policy.json` to `%ProgramData%\CraftSpace\` (Windows),
 
 ```json
 {
+  "organization": "Riverside School Art Lab",
+  "support": "https://help.example.edu/art-lab",
   "settings": { "auto_install_updates": true, "include_prereleases": false },
+  "lock_settings": false,
   "required_apps": ["photocraft", "pdfcraft"],
   "allowed_apps": ["photocraft", "pdfcraft", "gridcraft"],
+  "blocked_apps": [],
+  "pinned_versions": { "photocraft": "0.3.0" },
+  "update_window": { "days": ["mon", "tue", "wed", "thu", "fri"], "from": "17:00", "to": "07:00" },
+  "prevent_uninstall": true,
+  "report_dir": "\\\\server\\craftspace\\reports",
+  "policy_url": "https://example.edu/craftspace/policy.json",
   "disable_self_update": false,
   "quiet": true
 }
 ```
 
-`settings` values are forced and shown as locked in the app; `required_apps` are installed on
-start (or with `craftspace-cli apply-policy` from a login script); `allowed_apps` hides
-everything else. An exported app list (`craftspace-cli export`) sets up a lab the same way:
-`craftspace-cli --quiet import apps.json --exact`.
+- `settings` values are forced and shown as locked in the app; `lock_settings` locks all of them.
+- `required_apps` are installed on start (or with `craftspace-cli apply-policy` from a login
+  script); `allowed_apps` hides everything else and `blocked_apps` hides single apps.
+- `pinned_versions` keeps every computer on the same version (older or newer ones are replaced).
+- `update_window` limits automatic updates to those hours (past midnight works); manual updates
+  are always allowed, and `craftspace-cli update --scheduled` does nothing outside it.
+- `prevent_uninstall` hides Uninstall, Rollback and channel choices; only an administrator can
+  uninstall from the command line.
+- `report_dir` gets a `<computer name>.json` after each check: computer, OS, CraftSpace and every
+  app's version and update state. `craftspace-cli report` prints the same.
+- `policy_url` is fetched on each check and its values replace this file's (from the next start,
+  or right away with `apply-policy`), so a whole room changes from one place.
+- `organization` and `support` show as a "Managed by" badge in the app's top bar.
+
+Classrooms can share a **package cache**: set a folder (Settings › IT & Classroom, or
+`craftspace-cli config package_cache '\\server\craftspace\packages'`), fill it once with
+`craftspace-cli cache fill`, and every computer installs from it after checking the published
+checksum. `package_cache_write` lets computers add what they download. An exported app list
+(`craftspace-cli export`) sets up a lab the same way: `craftspace-cli --quiet import apps.json --exact`.
 
 ## Building
 

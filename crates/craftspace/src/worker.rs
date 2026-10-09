@@ -110,6 +110,13 @@ pub enum Msg {
     SelfUpdateFound(Option<Box<SelfUpdate>>),
     SelfUpdateDone(Result<String, String>),
     TestNotification(Result<(), String>),
+    SourceChecked(Result<craftspace_core::sources::SourceCheck, String>),
+    /// An add/remove/change of other sources finished (message for the user).
+    SourceDone(Result<String, String>),
+    /// The organization's central policy changed (reopen the manager).
+    PolicyChanged,
+    ResetDone(String, Result<String, String>),
+    CacheFilled(Result<String, String>),
     /// Apps found on this computer and adopted: (name, version).
     Adopted(Vec<(String, Option<Version>)>),
 }
@@ -207,6 +214,11 @@ pub fn refresh(bus: &Bus, manager: &Manager, force: bool, manual: bool) {
         if let Err(err) = manager.refresh_catalog() {
             log::info!("using the built-in app list: {err:#}");
         }
+        match manager.refresh_policy() {
+            Ok(Some(_)) => bus.send(Msg::PolicyChanged),
+            Ok(None) => {}
+            Err(err) => log::warn!("couldn't get the organization's policy: {err:#}"),
+        }
         match manager.adopt_installed() {
             Ok(found) if !found.is_empty() => bus.send(Msg::Adopted(found)),
             Ok(_) => {}
@@ -214,6 +226,9 @@ pub fn refresh(bus: &Bus, manager: &Manager, force: bool, manual: bool) {
         }
         let errors = manager.refresh_all(force).into_iter().map(|(id, e)| (id, format!("{e:#}"))).collect();
         bus.send(Msg::Refreshed { errors, manual });
+        if let Err(err) = manager.write_report() {
+            log::warn!("couldn't write the status report: {err:#}");
+        }
         let changed = manager.fetch_icons();
         if !changed.is_empty() {
             bus.send(Msg::Icons(changed));
@@ -271,6 +286,42 @@ pub fn verify(bus: &Bus, manager: &Manager, id: &str) {
     bus.spawn("verify", move |bus| {
         let result = manager.verify(&id).map_err(|e| format!("{e:#}"));
         bus.send(Msg::Verified(id, result));
+    });
+}
+
+pub fn reset_app(bus: &Bus, manager: &Manager, id: &str) {
+    let (manager, id) = (manager.clone(), id.to_string());
+    bus.spawn("reset", move |bus| {
+        let name = manager.app(&id).map(|a| a.name).unwrap_or_else(|| id.clone());
+        let result = manager
+            .reset_app(&id)
+            .map(|moved| match moved.first() {
+                None => format!("{name} has no settings to reset"),
+                Some(first) => format!(
+                    "{name} starts fresh; its old settings are in {}",
+                    first.parent().unwrap_or(first).display()
+                ),
+            })
+            .map_err(|e| format!("{e:#}"));
+        bus.send(Msg::ResetDone(id, result));
+    });
+}
+
+/// Download the installed apps (all apps when none is installed) into the package cache.
+pub fn fill_cache(bus: &Bus, manager: &Manager) {
+    let manager = manager.clone();
+    bus.spawn("cache", move |bus| {
+        let ids: Vec<String> = manager.installed().apps.keys().cloned().collect();
+        let cancel = AtomicBool::new(false);
+        let progress = Progress { report: &|_| {}, cancel: &cancel };
+        let result = manager
+            .fill_cache(&ids, None, false, &progress)
+            .map(|files| match files.len() {
+                0 => "The package cache already has the current versions".to_string(),
+                n => format!("Added {n} package{} to the package cache", if n == 1 { "" } else { "s" }),
+            })
+            .map_err(|e| format!("{e:#}"));
+        bus.send(Msg::CacheFilled(result));
     });
 }
 
@@ -481,5 +532,40 @@ pub fn test_notification(bus: &Bus) {
             log::info!("test notification sent");
         }
         bus.send(Msg::TestNotification(result));
+    });
+}
+
+/// Something to do with other sources (Settings › Other sources).
+#[derive(Debug, Clone)]
+pub enum SourceOp {
+    Check { repo: String, id: String },
+    Add { repo: String, name: String, binary: String },
+    Set { id: String, repo: Option<String> },
+    Remove { id: String },
+}
+
+pub fn source_op(bus: &Bus, manager: &Manager, op: SourceOp) {
+    let manager = manager.clone();
+    bus.spawn("sources", move |bus| match op {
+        SourceOp::Check { repo, id } => {
+            bus.send(Msg::SourceChecked(manager.check_source(&repo, &id).map_err(|e| format!("{e:#}"))))
+        }
+        SourceOp::Add { repo, name, binary } => {
+            let result = manager
+                .add_source_app(&repo, Some(&name), Some(&binary))
+                .map(|(app, c)| format!("Added {} from github.com/{} ({})", app.name, app.repo, c.tag));
+            bus.send(Msg::SourceDone(result.map_err(|e| format!("{e:#}"))));
+        }
+        SourceOp::Set { id, repo } => {
+            let result = manager.set_app_source(&id, repo.as_deref()).map(|c| match c {
+                Some(c) => format!("Now updating from github.com/{} ({})", c.repo, c.tag),
+                None => "Back to the official repository".to_string(),
+            });
+            bus.send(Msg::SourceDone(result.map_err(|e| format!("{e:#}"))));
+        }
+        SourceOp::Remove { id } => {
+            let result = manager.remove_source_app(&id).map(|()| format!("Removed {id}"));
+            bus.send(Msg::SourceDone(result.map_err(|e| format!("{e:#}"))));
+        }
     });
 }

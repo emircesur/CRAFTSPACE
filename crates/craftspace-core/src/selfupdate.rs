@@ -14,6 +14,13 @@ use crate::platform::{AssetKind, Os};
 pub const REPO: &str = "emircesur/craftspace";
 pub const NAME: &str = "craftspace";
 
+/// Where CraftSpace looks for its own updates: the official repository, or a fork or mirror set
+/// in Settings › Other sources.
+pub fn update_repo(manager: &Manager) -> String {
+    let other = manager.settings().other_sources;
+    other.self_repo.filter(|_| other.enabled).unwrap_or_else(|| REPO.to_string())
+}
+
 /// CraftSpace's icon, for menu entries.
 pub const ICON_PNG: &[u8] = include_bytes!("../../../assets/craftspace-256.png");
 
@@ -35,7 +42,7 @@ pub fn check(manager: &Manager) -> anyhow::Result<Option<SelfUpdate>> {
         return Ok(None);
     }
     let settings = manager.settings();
-    let list = manager.github().releases(REPO, false)?;
+    let list = manager.github().releases(&update_repo(manager), false)?;
     let Some(release) = list.latest(settings.include_prereleases).cloned() else { return Ok(None) };
     let Some(version) = release.version.clone().filter(|v| *v > current_version()) else { return Ok(None) };
     // Self-updates always use the archive builds, never an installer.
@@ -47,7 +54,8 @@ pub fn check(manager: &Manager) -> anyhow::Result<Option<SelfUpdate>> {
     }
     let mut release = release;
     if release.assets[i].sha256.is_none() {
-        let _ = manager.github().fill_checksums(&mut release);
+        let name = release.assets[i].name.clone();
+        let _ = manager.github().fill_checksum(&mut release, &name);
     }
     let asset = release.assets[i].clone();
     Ok(Some(SelfUpdate { release, version, asset, kind }))
@@ -140,6 +148,7 @@ pub fn self_entry() -> crate::catalog::AppEntry {
         windows_installer: None,
         config_dir: None,
         metainfo: None,
+        custom: false,
     }
 }
 

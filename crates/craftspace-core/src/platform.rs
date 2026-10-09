@@ -325,6 +325,16 @@ pub fn kind_from_name(name: &str) -> Option<AssetKind> {
     }
 }
 
+/// Whether this process runs as an administrator (root, or an elevated Windows administrator).
+pub fn is_elevated() -> bool {
+    #[cfg(unix)]
+    return unsafe { libc::geteuid() } == 0;
+    #[cfg(windows)]
+    return unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() } != 0;
+    #[allow(unreachable_code)]
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -79,6 +79,9 @@ enum Command {
         /// Update apps that are open too.
         #[arg(long)]
         force: bool,
+        /// For scheduled tasks: only inside the policy's update window (otherwise do nothing).
+        #[arg(long)]
+        scheduled: bool,
     },
     /// List available updates without installing them. Exits with 10 when there are some.
     Check,
@@ -119,12 +122,49 @@ enum Command {
         #[arg(long)]
         exact: bool,
     },
-    /// Install the apps the machine policy requires.
+    /// Bring this computer in line with the machine policy: fetch the central policy, install
+    /// required apps, put pinned apps on their version, write the status report.
     ApplyPolicy,
+    /// The machine policy in effect.
+    Policy {
+        #[command(subcommand)]
+        action: PolicyAction,
+    },
+    /// What's installed here, for IT (as JSON with --json).
+    Report {
+        #[arg(long)]
+        json: bool,
+        /// Write it to this file.
+        #[arg(long, value_name = "FILE")]
+        out: Option<PathBuf>,
+        /// Write it into the policy's report folder (`<computer name>.json`).
+        #[arg(long)]
+        to_share: bool,
+    },
+    /// The shared package cache (a classroom's file share).
+    Cache {
+        #[command(subcommand)]
+        action: CacheAction,
+    },
+    /// Put an app's settings back to how they were on first start (e.g. between classes). The
+    /// old settings are kept beside them as `<folder>.reset-<time>`.
+    Reset {
+        apps: Vec<String>,
+        /// Every installed app.
+        #[arg(long, conflicts_with = "apps")]
+        all: bool,
+        #[arg(long, short)]
+        yes: bool,
+    },
     /// Open a file in the ArtCraft app that handles it.
     OpenFile { file: PathBuf },
     /// Find ArtCraft apps installed without CraftSpace and keep them up to date where they are.
     Detect,
+    /// Optional: apps from other GitHub repositories, and forks or mirrors to update from.
+    Source {
+        #[command(subcommand)]
+        action: SourceAction,
+    },
     /// Open ArtCraft file types through CraftSpace (double-clicking opens the right app, or
     /// offers to install it).
     FileTypes {
@@ -169,6 +209,63 @@ enum ChannelArg {
 enum OnOff {
     On,
     Off,
+}
+
+#[derive(Subcommand)]
+enum PolicyAction {
+    /// Show the policy in effect and where it comes from.
+    Show {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Check a policy file before deploying it.
+    Check { file: PathBuf },
+    /// Fetch the centrally published policy (policy_url) now.
+    Refresh,
+}
+
+#[derive(Subcommand)]
+enum CacheAction {
+    /// Download packages into the cache, so the other computers install from it.
+    Fill {
+        /// Apps to fetch (default: all).
+        apps: Vec<String>,
+        /// The cache folder (default: the package_cache setting).
+        #[arg(long, value_name = "FOLDER")]
+        dir: Option<PathBuf>,
+        /// Packages for every platform, for a lab with Windows, macOS and Linux computers.
+        #[arg(long)]
+        all_platforms: bool,
+    },
+    /// Show the cache folder and what's in it.
+    Status,
+}
+
+#[derive(Subcommand)]
+enum SourceAction {
+    /// Show whether other sources are on, the apps added and the repositories in use.
+    List,
+    /// Turn other sources on.
+    Enable,
+    /// Turn them off (added apps are hidden, ArtCraft apps update from the official repositories).
+    Disable,
+    /// Show what a repository offers this computer, without adding it.
+    Check { repo: String },
+    /// Add an app from a GitHub repository (owner/repo or its github.com address).
+    Add {
+        repo: String,
+        /// The name shown in CraftSpace (default: from the repository's name).
+        #[arg(long)]
+        name: Option<String>,
+        /// The program's file name, when it isn't the repository's name (e.g. rg for ripgrep).
+        #[arg(long)]
+        binary: Option<String>,
+    },
+    /// Remove an app added from GitHub (uninstall it first).
+    Remove { app: String },
+    /// Update an ArtCraft app, or CraftSpace itself (`craftspace`), from another repository:
+    /// a fork, a mirror or a backup. `official` goes back to the official repository.
+    Set { app: String, repo: String },
 }
 
 #[derive(Subcommand)]
@@ -242,7 +339,12 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 }
             }
         }
-        Command::Update { apps, force } => {
+        Command::Update { apps, force, scheduled } => {
+            if scheduled && !manager.policy().may_update_now() {
+                let window = manager.policy().update_window.as_ref().map(|w| w.describe()).unwrap_or_default();
+                say!("Outside the update window ({window}); nothing to do.");
+                return Ok(ExitCode::SUCCESS);
+            }
             refresh_all(&manager, cli.refresh);
             let updates: Vec<AppState> = manager
                 .updates()
@@ -357,15 +459,226 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             }
         }
         Command::ApplyPolicy => {
+            // The central policy first, so the rest follows it.
+            let manager = match manager.refresh_policy() {
+                Ok(Some(_)) => {
+                    say!("Fetched the central policy.");
+                    Manager::open()?
+                }
+                Ok(None) => manager,
+                Err(err) => {
+                    eprintln!("warning: couldn't fetch the central policy (using the last one): {err:#}");
+                    manager
+                }
+            };
             let policy = manager.policy();
             match &policy.source {
                 Some(src) => say!("Policy: {}", src.display()),
                 None => say!("No machine policy is set."),
             }
+            refresh_all(&manager, cli.refresh);
             for id in manager.required_missing() {
-                if let Err(err) = install(&manager, &id, None, cli.refresh, false) {
+                if let Err(err) = install(&manager, &id, None, false, false) {
                     eprintln!("error: {id}: {err:#}");
                     failed += 1;
+                }
+            }
+            for (id, version) in manager.off_pinned_version() {
+                say!("{id} is pinned to {version}");
+                if let Err(err) = install(&manager, &id, Some(&version), false, true) {
+                    eprintln!("error: {id}: {err:#}");
+                    failed += 1;
+                }
+            }
+            match manager.write_report() {
+                Ok(Some(file)) => say!("Report: {}", file.display()),
+                Ok(None) => {}
+                Err(err) => eprintln!("warning: couldn't write the report: {err:#}"),
+            }
+        }
+        Command::Policy { action } => match action {
+            PolicyAction::Show { json } => {
+                let policy = manager.policy();
+                if json {
+                    println!("{}", serde_json::to_string_pretty(policy)?);
+                    return Ok(ExitCode::SUCCESS);
+                }
+                match &policy.source {
+                    Some(src) => say!("Policy file: {}", src.display()),
+                    None => {
+                        say!(
+                            "No machine policy is set (looked at {}).",
+                            craftspace_core::policy::Policy::default_path().display()
+                        );
+                        return Ok(ExitCode::SUCCESS);
+                    }
+                }
+                if let Some(url) = &policy.policy_url {
+                    say!("Central policy: {url}");
+                }
+                if let Some(org) = &policy.organization {
+                    say!(
+                        "Managed by: {org}{}",
+                        policy.support.as_deref().map(|s| format!(" ({s})")).unwrap_or_default()
+                    );
+                }
+                let list = |v: &[String]| if v.is_empty() { "-".to_string() } else { v.join(", ") };
+                say!("Required apps: {}", list(&policy.required_apps));
+                say!(
+                    "Allowed apps: {}",
+                    if policy.allowed_apps.is_empty() { "all".into() } else { list(&policy.allowed_apps) }
+                );
+                say!("Blocked apps: {}", list(&policy.blocked_apps));
+                for (id, v) in &policy.pinned_versions {
+                    say!("Pinned: {id} {v}");
+                }
+                if let Some(w) = &policy.update_window {
+                    say!(
+                        "Update window: {} ({})",
+                        w.describe(),
+                        if policy.may_update_now() { "open now" } else { "closed now" }
+                    );
+                }
+                say!(
+                    "Settings locked: {}",
+                    if policy.lock_settings {
+                        "all".to_string()
+                    } else {
+                        list(&policy.settings.keys().cloned().collect::<Vec<_>>())
+                    }
+                );
+                say!("Uninstalling: {}", if policy.prevent_uninstall { "administrators only" } else { "allowed" });
+                if let Some(dir) = &policy.report_dir {
+                    say!("Reports go to: {}", dir.display());
+                }
+            }
+            PolicyAction::Check { file } => {
+                let text = std::fs::read_to_string(&file)?;
+                let policy: craftspace_core::policy::Policy =
+                    serde_json::from_str(&text).with_context(|| format!("{} isn't a valid policy", file.display()))?;
+                let applied = policy.apply(&manager.settings());
+                // Settings that don't exist or don't fit are reported, not silently dropped.
+                let known = serde_json::to_value(&applied)?;
+                for key in policy.settings.keys() {
+                    anyhow::ensure!(known.get(key).is_some(), "unknown setting \"{key}\"");
+                    anyhow::ensure!(known[key] == policy.settings[key], "the setting \"{key}\" has the wrong type");
+                }
+                let catalog = craftspace_core::catalog::Catalog::builtin();
+                for id in policy
+                    .required_apps
+                    .iter()
+                    .chain(&policy.allowed_apps)
+                    .chain(&policy.blocked_apps)
+                    .chain(policy.pinned_versions.keys())
+                {
+                    if catalog.app(id).is_none() {
+                        eprintln!("warning: \"{id}\" isn't a known app");
+                    }
+                }
+                for (id, v) in &policy.pinned_versions {
+                    anyhow::ensure!(
+                        semver::Version::parse(v.trim_start_matches('v')).is_ok(),
+                        "{id}: \"{v}\" isn't a version"
+                    );
+                }
+                if let Some(w) = &policy.update_window {
+                    say!("Update window: {}", w.describe());
+                }
+                say!("{} is a valid policy.", file.display());
+            }
+            PolicyAction::Refresh => match manager.refresh_policy()? {
+                Some(_) => say!("The central policy changed; it applies from the next start (or run apply-policy)."),
+                None if manager.policy().policy_url.is_none() => say!("The policy has no policy_url."),
+                None => say!("The central policy is unchanged."),
+            },
+        },
+        Command::Report { json, out, to_share } => {
+            let report = manager.report();
+            if to_share {
+                match manager.write_report()? {
+                    Some(file) => say!("Report written to {}", file.display()),
+                    None => anyhow::bail!("the policy has no report_dir"),
+                }
+            }
+            if let Some(file) = &out {
+                std::fs::write(file, serde_json::to_string_pretty(&report)?)?;
+                say!("Report written to {}", file.display());
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else if out.is_none() && !to_share {
+                say!(
+                    "{} · {} · CraftSpace {}",
+                    report["computer"].as_str().unwrap_or("?"),
+                    report["platform"].as_str().unwrap_or("?"),
+                    report["craftspace"].as_str().unwrap_or("?")
+                );
+                for app in report["apps"].as_array().into_iter().flatten() {
+                    let mut line = format!(
+                        "  {:<14} {:<10}",
+                        app["id"].as_str().unwrap_or(""),
+                        app["version"].as_str().unwrap_or("")
+                    );
+                    if app["update_available"].as_bool() == Some(true) {
+                        line.push_str(&format!(" update: {}", app["latest"].as_str().unwrap_or("")));
+                    }
+                    if let Some(p) = app["pinned"].as_str() {
+                        line.push_str(&format!(" pinned: {p}"));
+                    }
+                    say!("{line}");
+                }
+            }
+        }
+        Command::Cache { action } => match action {
+            CacheAction::Fill { apps, dir, all_platforms } => {
+                refresh_all(&manager, cli.refresh);
+                let files = with_progress("packages", |p| manager.fill_cache(&apps, dir.as_deref(), all_platforms, p))?;
+                say!("Added {} package{} to the cache.", files.len(), if files.len() == 1 { "" } else { "s" });
+            }
+            CacheAction::Status => {
+                let settings = manager.settings();
+                match &settings.package_cache {
+                    None => say!("No package cache is set (config package_cache <folder>)."),
+                    Some(dir) => {
+                        say!(
+                            "Package cache: {} ({})",
+                            dir.display(),
+                            if settings.package_cache_write { "shared: downloads are added" } else { "read only" }
+                        );
+                        let mut total = 0u64;
+                        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                            let size = e.metadata().map(|m| m.len()).unwrap_or(0);
+                            total += size;
+                            say!("  {:<56} {}", e.file_name().to_string_lossy(), format_bytes(size));
+                        }
+                        say!("Total: {}", format_bytes(total));
+                    }
+                }
+            }
+        },
+        Command::Reset { apps, all, yes } => {
+            let ids: Vec<String> = if all { manager.installed().apps.into_keys().collect() } else { apps };
+            anyhow::ensure!(!ids.is_empty(), "name the apps to reset, or use --all");
+            if !yes && std::io::stdin().is_terminal() {
+                eprint!("Reset the settings of {}? Their current settings are kept aside. [y/N] ", ids.join(", "));
+                let mut answer = String::new();
+                std::io::stdin().read_line(&mut answer)?;
+                if !answer.trim().eq_ignore_ascii_case("y") {
+                    return Ok(ExitCode::SUCCESS);
+                }
+            }
+            for id in ids {
+                match manager.reset_app(&id) {
+                    Ok(moved) if moved.is_empty() => say!("{id}: no settings yet"),
+                    Ok(moved) => {
+                        for m in moved {
+                            say!("{id}: settings moved to {}", m.display());
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("error: {id}: {err:#}");
+                        failed += 1;
+                    }
                 }
             }
         }
@@ -446,6 +759,56 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                     let settings = serde_json::from_value(json).with_context(|| format!("bad value for {k}"))?;
                     manager.set_settings(settings)?;
                     say!("{k} updated.");
+                }
+            }
+        }
+        Command::Source { action } => {
+            let mut settings = manager.settings();
+            match action {
+                SourceAction::List => {
+                    let other = &settings.other_sources;
+                    say!(
+                        "Other sources: {}",
+                        if other.enabled { "on" } else { "off (CraftSpace manages the ArtCraft apps only)" }
+                    );
+                    say!("CraftSpace updates from: {}", selfupdate::update_repo(&manager));
+                    for app in &other.apps {
+                        say!("  {:<16} {:<24} github.com/{}", app.id, app.name, app.repo);
+                    }
+                    for (id, repo) in &other.overrides {
+                        say!("  {id:<16} updates from github.com/{repo} (instead of the official repository)");
+                    }
+                }
+                SourceAction::Enable | SourceAction::Disable => {
+                    settings.other_sources.enabled = matches!(action, SourceAction::Enable);
+                    let on = settings.other_sources.enabled;
+                    manager.set_settings(settings)?;
+                    if manager.settings().other_sources.enabled != on {
+                        anyhow::bail!("your organization manages this setting");
+                    }
+                    say!("Other sources are {}.", if on { "on" } else { "off" });
+                }
+                SourceAction::Check { repo } => {
+                    let repo = craftspace_core::sources::normalize_repo(&repo)?;
+                    let id = repo.rsplit('/').next().unwrap_or_default().to_ascii_lowercase();
+                    let c = manager.check_source(&repo, &id)?;
+                    say!("{} {}: would install {} ({})", c.repo, c.tag, c.asset, c.kind.label());
+                }
+                SourceAction::Add { repo, name, binary } => {
+                    let (app, c) = manager.add_source_app(&repo, name.as_deref(), binary.as_deref())?;
+                    say!("Added {} ({}) from github.com/{}: {} {}", app.name, app.id, app.repo, c.tag, c.asset);
+                    say!("Install it with: craftspace-cli install {}", app.id);
+                }
+                SourceAction::Remove { app } => {
+                    manager.remove_source_app(&app)?;
+                    say!("Removed {app}.");
+                }
+                SourceAction::Set { app, repo } => {
+                    let repo = (!repo.eq_ignore_ascii_case("official")).then_some(repo);
+                    match manager.set_app_source(&app, repo.as_deref())? {
+                        Some(c) => say!("{app} now updates from github.com/{} ({} {})", c.repo, c.tag, c.asset),
+                        None => say!("{app} updates from its official repository again."),
+                    }
                 }
             }
         }

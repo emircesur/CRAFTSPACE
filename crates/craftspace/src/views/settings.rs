@@ -2,7 +2,8 @@
 //! sets are shown but can't be changed.
 
 use craftspace_core::platform::Os;
-use craftspace_core::settings::Theme;
+use craftspace_core::policy::Policy;
+use craftspace_core::settings::{Settings, Theme};
 use eframe::egui::{self, Align, Layout, RichText, Ui};
 
 use crate::app::{Action, CraftSpaceApp};
@@ -22,7 +23,12 @@ pub fn window(app: &mut CraftSpaceApp, ctx: &egui::Context) {
         ui.heading("Settings");
         if policy.is_active() {
             ui.add_space(4.0);
-            theme::chip(ui, "Some settings are managed by your organization", p.warn);
+            let org = policy.organization.as_deref().unwrap_or("your organization");
+            if policy.lock_settings {
+                theme::chip(ui, &format!("Settings are managed by {org} and can't be changed here"), p.warn);
+            } else {
+                theme::chip(ui, &format!("Some settings are managed by {org}"), p.warn);
+            }
         }
         ui.add_space(8.0);
         egui::ScrollArea::vertical().max_height(ctx.content_rect().height() - 220.0).show(ui, |ui| {
@@ -84,7 +90,7 @@ pub fn window(app: &mut CraftSpaceApp, ctx: &egui::Context) {
                 });
             });
             ui.label(
-                RichText::new("Apps already installed stay where they are. To put one app somewhere else, use \"Install in a folder…\" in its ⋯ menu.")
+                RichText::new("Apps already installed stay where they are. To put one app somewhere else, use \"Install in a folder…\" in its ••• menu.")
                     .size(12.0)
                     .color(p.weak),
             );
@@ -174,6 +180,65 @@ pub fn window(app: &mut CraftSpaceApp, ctx: &egui::Context) {
                 }
             });
 
+            section(ui, &p, "IT & Classroom");
+            it_section(app, ui, &p, &policy, &mut draft);
+
+            section(ui, &p, "Other sources (advanced)");
+            ui.add_enabled(
+                free("other_sources"),
+                egui::Checkbox::new(&mut draft.other_sources.enabled, "Let CraftSpace install and update apps from other GitHub repositories"),
+            );
+            ui.label(
+                RichText::new("Off, CraftSpace manages the ArtCraft apps only. On, you can add any repository's app, or update an ArtCraft app or CraftSpace itself from a fork, a mirror or a backup.")
+                    .size(12.0)
+                    .color(p.weak),
+            );
+            if app.settings.other_sources.enabled && draft.other_sources.enabled {
+                let other = app.settings.other_sources.clone();
+                for custom in &other.apps {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(&custom.name).strong());
+                        ui.label(RichText::new(format!("github.com/{}", custom.repo)).size(12.0).color(p.weak));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let installed = app.manager.installed_app(&custom.id).is_some();
+                            if ui
+                                .add_enabled(!installed, egui::Button::new("Remove").small())
+                                .on_disabled_hover_text("Uninstall it first")
+                                .clicked()
+                            {
+                                app.actions.push(Action::Source(crate::worker::SourceOp::Remove { id: custom.id.clone() }));
+                            }
+                        });
+                    });
+                }
+                for (id, repo) in &other.overrides {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{} updates from github.com/{repo}", app.app_name(id)));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.add(egui::Button::new("Change…").small()).clicked() {
+                                app.actions.push(Action::OpenSource(crate::views::sources::Target::App(id.clone())));
+                            }
+                        });
+                    });
+                }
+                ui.horizontal(|ui| {
+                    ui.label(format!("CraftSpace updates from github.com/{}", craftspace_core::selfupdate::update_repo(&app.manager)));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.add(egui::Button::new("Change…").small()).clicked() {
+                            app.actions.push(Action::OpenSource(crate::views::sources::Target::App(
+                                craftspace_core::selfupdate::NAME.into(),
+                            )));
+                        }
+                    });
+                });
+                if ui.button("Add an app from GitHub…").clicked() {
+                    app.actions.push(Action::OpenSource(crate::views::sources::Target::NewApp));
+                }
+                ui.label(RichText::new("To update an ArtCraft app from a fork, use \"Update source…\" in its ••• menu.").size(12.0).color(p.weak));
+            } else if draft.other_sources.enabled {
+                ui.label(RichText::new("Save to turn them on, then add apps here.").size(12.0).color(p.warn));
+            }
+
             section(ui, &p, "GitHub");
             ui.label("Release information comes from GitHub. Without a token, GitHub allows 60 requests an hour; CraftSpace caches and falls back to direct downloads when the limit is hit. A token with no scopes raises the limit.");
             let mut token = draft.github_token.clone().unwrap_or_default();
@@ -223,6 +288,106 @@ pub fn window(app: &mut CraftSpaceApp, ctx: &egui::Context) {
     if keep_open {
         app.settings_draft = Some(draft);
     }
+}
+
+/// What the organization's policy sets, and the tools for computer labs: a shared package
+/// cache, status reports.
+fn it_section(app: &mut CraftSpaceApp, ui: &mut Ui, p: &theme::Palette, policy: &Policy, draft: &mut Settings) {
+    let weak = |t: String| RichText::new(t).size(12.0).color(p.weak);
+    match &policy.source {
+        Some(src) => {
+            let org = policy.organization.as_deref().unwrap_or("An organization");
+            ui.label(format!("{org} manages CraftSpace on this computer."));
+            ui.label(weak(format!("Policy file: {}", src.display())));
+            if let Some(url) = &policy.policy_url {
+                ui.label(weak(format!("Updated from: {url}")));
+            }
+            let mut facts = Vec::new();
+            if let Some(w) = &policy.update_window {
+                facts.push(format!("Updates install {}.", w.describe()));
+            }
+            if !policy.required_apps.is_empty() {
+                facts.push(format!("Always installed: {}.", names(app, &policy.required_apps)));
+            }
+            if !policy.pinned_versions.is_empty() {
+                let pins: Vec<String> =
+                    policy.pinned_versions.iter().map(|(id, v)| format!("{} {v}", app.app_name(id))).collect();
+                facts.push(format!("Kept on: {}.", pins.join(", ")));
+            }
+            if !policy.blocked_apps.is_empty() {
+                facts.push(format!("Not available: {}.", names(app, &policy.blocked_apps)));
+            }
+            if policy.prevent_uninstall {
+                facts.push("Apps can't be uninstalled or rolled back (except by an administrator).".into());
+            }
+            if let Some(dir) = &policy.report_dir {
+                facts.push(format!("A status report is saved to {} after each check.", dir.display()));
+            }
+            for f in facts {
+                ui.label(f);
+            }
+            if let Some(support) = &policy.support {
+                ui.label(format!("Help: {support}"));
+            }
+        }
+        None => {
+            ui.label(weak(
+                "Not managed. For labs and classrooms, a policy file can install apps on every computer, keep them on a version, \
+                 limit updates to after-school hours and lock settings: run `craftspace-cli policy show` for where it goes, \
+                 and see \"Managing many computers\" in the README."
+                    .into(),
+            ));
+        }
+    }
+    ui.add_space(4.0);
+    ui.label("Package cache (a shared folder, so a room of computers downloads each app once)");
+    let locked = policy.locks("package_cache");
+    ui.horizontal(|ui| {
+        let text = draft.package_cache.as_ref().map(|d| d.display().to_string()).unwrap_or_else(|| "Not used".into());
+        ui.add(egui::Label::new(RichText::new(text).monospace()).truncate());
+        ui.add_enabled_ui(!locked, |ui| {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if draft.package_cache.is_some() && ui.button("Don't use").clicked() {
+                    draft.package_cache = None;
+                }
+                if ui.button("Choose…").clicked() {
+                    if let Some(dir) = rfd::FileDialog::new().set_title("Package cache folder").pick_folder() {
+                        draft.package_cache = Some(dir);
+                    }
+                }
+            });
+        });
+    });
+    if draft.package_cache.is_some() {
+        ui.add_enabled(
+            !policy.locks("package_cache_write"),
+            egui::Checkbox::new(&mut draft.package_cache_write, "Also put what this computer downloads into the cache"),
+        );
+        ui.label(weak("Packages are checked against their published checksums before they're used.".into()));
+    }
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .button("Save a status report…")
+            .on_hover_text("This computer, CraftSpace and every app's version, as JSON")
+            .clicked()
+        {
+            app.actions.push(Action::SaveReport);
+        }
+        let cache_set = app.settings.package_cache.is_some();
+        if ui
+            .add_enabled(cache_set, egui::Button::new("Fill the package cache now"))
+            .on_hover_text("Download the current version of the installed apps into the cache")
+            .on_disabled_hover_text("Choose a package cache folder and save first")
+            .clicked()
+        {
+            app.actions.push(Action::FillCache);
+        }
+    });
+    ui.label(weak("To give an app fresh settings, use \"Reset settings…\" in its ••• menu.".into()));
+}
+
+fn names(app: &CraftSpaceApp, ids: &[String]) -> String {
+    ids.iter().map(|id| app.app_name(id)).collect::<Vec<_>>().join(", ")
 }
 
 fn section(ui: &mut Ui, p: &crate::theme::Palette, title: &str) {

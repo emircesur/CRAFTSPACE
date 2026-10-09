@@ -144,8 +144,16 @@ impl Manager {
         Manager::open_with_policy(paths, Policy::load())
     }
 
-    pub fn open_with_policy(paths: Paths, policy: Policy) -> anyhow::Result<Manager> {
+    pub fn open_with_policy(paths: Paths, mut policy: Policy) -> anyhow::Result<Manager> {
         paths.ensure().with_context(|| format!("creating {}", paths.root.display()))?;
+        // The centrally published policy, as last fetched.
+        if policy.policy_url.is_some() {
+            if let Some(remote) =
+                std::fs::read(remote_policy_file(&paths)).ok().and_then(|b| serde_json::from_slice::<Policy>(&b).ok())
+            {
+                policy.overlay(remote);
+            }
+        }
         let settings = Settings::load(&paths.settings_file());
         let mut installed = InstalledDb::load(&paths.installed_file());
         installed.retry_pending_removal();
@@ -228,12 +236,141 @@ impl Manager {
     /// The app list, without apps the policy doesn't allow.
     pub fn catalog(&self) -> Catalog {
         let mut catalog = self.inner.catalog.read().unwrap().clone();
+        crate::sources::apply(&mut catalog, &self.settings().other_sources);
         catalog.apps.retain(|a| self.inner.policy.allows(&a.id));
         catalog
     }
 
     pub fn app(&self, id: &str) -> Option<AppEntry> {
-        self.inner.catalog.read().unwrap().app(id).filter(|a| self.inner.policy.allows(&a.id)).cloned()
+        let other = self.settings().other_sources;
+        let mut app = self.inner.catalog.read().unwrap().app(id).cloned().or_else(|| {
+            other
+                .enabled
+                .then(|| other.apps.iter().find(|a| a.id.eq_ignore_ascii_case(id)).map(crate::sources::custom_entry))?
+        })?;
+        if other.enabled {
+            if let Some(repo) = other.overrides.get(&app.id) {
+                app.repo.clone_from(repo);
+            }
+        }
+        self.inner.policy.allows(&app.id).then_some(app)
+    }
+
+    // ---- other sources (optional) --------------------------------------------------------
+
+    /// What `repo` offers this computer: its latest release and the file that would be
+    /// installed. `id` is the app's id, for release files named the ArtCraft way.
+    pub fn check_source(&self, repo: &str, id: &str) -> anyhow::Result<crate::sources::SourceCheck> {
+        let repo = crate::sources::normalize_repo(repo)?;
+        let settings = self.settings();
+        let list = self.github().releases(&repo, true)?;
+        let release = list
+            .latest(settings.include_prereleases)
+            .or_else(|| list.latest(true))
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("{repo} has no releases"))?;
+        let prefs = self.app(id).map(|a| settings.asset_prefs(&a)).unwrap_or_default();
+        let (i, kind) = self.inner.platform.select_asset(id, &release.asset_names(), prefs).ok_or_else(|| {
+            anyhow::anyhow!("{repo} {} has no file for {}", release.tag, self.inner.platform.display())
+        })?;
+        Ok(crate::sources::SourceCheck {
+            repo,
+            tag: release.tag.clone(),
+            version: release.version.clone(),
+            asset: release.assets[i].name.clone(),
+            kind,
+        })
+    }
+
+    fn require_other_sources(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.settings().other_sources.enabled,
+            "other sources are off; turn them on in Settings › Other sources (or: craftspace-cli source enable)"
+        );
+        anyhow::ensure!(
+            !self.inner.policy.locks("other_sources"),
+            "your organization manages other sources on this computer"
+        );
+        Ok(())
+    }
+
+    /// Add an app from a GitHub repository. Returns it once its releases check out.
+    pub fn add_source_app(
+        &self,
+        repo: &str,
+        name: Option<&str>,
+        binary: Option<&str>,
+    ) -> anyhow::Result<(crate::settings::CustomApp, crate::sources::SourceCheck)> {
+        self.require_other_sources()?;
+        let repo = crate::sources::normalize_repo(repo)?;
+        let mut settings = self.settings();
+        anyhow::ensure!(
+            !settings.other_sources.apps.iter().any(|a| a.repo.eq_ignore_ascii_case(&repo)),
+            "{repo} is already added"
+        );
+        let catalog = self.inner.catalog.read().unwrap().clone();
+        let taken = |id: &str| catalog.app(id).is_some() || settings.other_sources.apps.iter().any(|a| a.id == id);
+        let id = crate::sources::new_id(&repo, &taken);
+        let app = crate::settings::CustomApp {
+            id: id.clone(),
+            name: name
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| crate::sources::name_from_repo(&repo)),
+            repo: repo.clone(),
+            binary: binary.map(str::trim).filter(|b| !b.is_empty()).map(str::to_string),
+        };
+        settings.other_sources.apps.push(app.clone());
+        self.set_settings(settings.clone())?;
+        match self.check_source(&repo, &id) {
+            Ok(check) => {
+                let _ = self.refresh(&id, true);
+                Ok((app, check))
+            }
+            Err(err) => {
+                settings.other_sources.apps.retain(|a| a.id != id);
+                self.set_settings(settings)?;
+                Err(err)
+            }
+        }
+    }
+
+    /// Remove an app added from GitHub (uninstall it first).
+    pub fn remove_source_app(&self, id: &str) -> anyhow::Result<()> {
+        anyhow::ensure!(self.installed_app(id).is_none(), "uninstall {id} first");
+        let mut settings = self.settings();
+        let before = settings.other_sources.apps.len();
+        settings.other_sources.apps.retain(|a| a.id != id);
+        anyhow::ensure!(settings.other_sources.apps.len() < before, "{id} wasn't added from GitHub");
+        self.inner.releases.write().unwrap().remove(id);
+        self.set_settings(settings)
+    }
+
+    /// Update an ArtCraft app (or CraftSpace, as `craftspace`) from another repository: a fork,
+    /// a mirror, a backup. `None` goes back to the official one.
+    pub fn set_app_source(&self, id: &str, repo: Option<&str>) -> anyhow::Result<Option<crate::sources::SourceCheck>> {
+        self.require_other_sources()?;
+        let repo = repo.map(crate::sources::normalize_repo).transpose()?;
+        let check = match &repo {
+            Some(r) => Some(self.check_source(r, id)?),
+            None => None,
+        };
+        let mut settings = self.settings();
+        if id == crate::selfupdate::NAME {
+            settings.other_sources.self_repo = repo;
+        } else {
+            anyhow::ensure!(self.inner.catalog.read().unwrap().app(id).is_some(), "unknown app '{id}'");
+            match repo {
+                Some(r) => settings.other_sources.overrides.insert(id.to_string(), r),
+                None => settings.other_sources.overrides.remove(id),
+            };
+        }
+        self.set_settings(settings)?;
+        if id != crate::selfupdate::NAME {
+            let _ = self.refresh(id, true);
+        }
+        Ok(check)
     }
 
     fn require_app(&self, id: &str) -> anyhow::Result<AppEntry> {
@@ -406,6 +543,170 @@ impl Manager {
         self.inner.policy.required_apps.iter().filter(|id| self.installed_app(id).is_none()).cloned().collect()
     }
 
+    /// Installed apps that aren't on the version the policy pins them to: (id, pinned version).
+    pub fn off_pinned_version(&self) -> Vec<(String, Version)> {
+        self.installed()
+            .apps
+            .values()
+            .filter_map(|a| {
+                self.inner.policy.pinned(&a.id).filter(|v| *v != a.current.version).map(|v| (a.id.clone(), v))
+            })
+            .collect()
+    }
+
+    // ---- IT and classrooms -----------------------------------------------------------------
+
+    /// Fetch the centrally published policy (`policy_url`) and keep it for the next start.
+    /// Returns the new policy when it changed.
+    pub fn refresh_policy(&self) -> anyhow::Result<Option<Policy>> {
+        let Some(url) = self.inner.policy.policy_url.clone() else { return Ok(None) };
+        anyhow::ensure!(url.starts_with("https://"), "the policy address must start with https://");
+        let mut resp = self.inner.agent.get(&url).call()?;
+        check_status(&url, resp.status().as_u16())?;
+        let text = resp.body_mut().read_to_string()?;
+        let remote: Policy = serde_json::from_str(&text).with_context(|| format!("the policy at {url} isn't valid"))?;
+        let file = remote_policy_file(&self.inner.paths);
+        let old = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice::<Policy>(&b).ok());
+        write_atomic(&file, text.as_bytes())?;
+        Ok((old.as_ref() != Some(&remote)).then_some(remote))
+    }
+
+    /// Whether this process may make changes the policy keeps from users (uninstalling, rolling
+    /// back): only an administrator, when `prevent_uninstall` is set.
+    fn guard_managed(&self, what: &str) -> anyhow::Result<()> {
+        if self.inner.policy.prevent_uninstall && !crate::platform::is_elevated() {
+            let help = self.inner.policy.support.as_deref().map(|s| format!(" (help: {s})")).unwrap_or_default();
+            let org = self.inner.policy.organization.as_deref().unwrap_or("Your organization");
+            anyhow::bail!("{org} manages the apps on this computer, so {what} is turned off{help}");
+        }
+        Ok(())
+    }
+
+    /// What's installed here, for IT: computer, CraftSpace, policy and every app's version and
+    /// update state.
+    pub fn report(&self) -> serde_json::Value {
+        let policy = &self.inner.policy;
+        let apps: Vec<serde_json::Value> = self
+            .states()
+            .into_iter()
+            .filter_map(|s| {
+                let i = s.installed.as_ref()?;
+                Some(serde_json::json!({
+                    "id": s.app.id,
+                    "name": s.app.name,
+                    "version": i.current.version.to_string(),
+                    "kind": i.current.kind,
+                    "latest": s.latest.as_ref().and_then(|r| r.version.as_ref()).map(|v| v.to_string()),
+                    "update_available": s.update_available,
+                    "pinned": policy.pinned(&s.app.id).map(|v| v.to_string()),
+                    "found_on_computer": i.current.external.is_some(),
+                    "location": i.current.executable,
+                    "installed_at": i.current.installed_at,
+                }))
+            })
+            .collect();
+        serde_json::json!({
+            "computer": sysinfo::System::host_name().unwrap_or_default(),
+            "user": std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_default(),
+            "platform": self.inner.platform.display(),
+            "os": sysinfo::System::long_os_version().unwrap_or_default(),
+            "craftspace": crate::selfupdate::current_version().to_string(),
+            "reported_at": github::now_secs(),
+            "policy": {
+                "source": policy.source,
+                "organization": policy.organization,
+                "required_missing": self.required_missing(),
+                "off_pinned_version": self.off_pinned_version().into_iter().map(|(id, v)| (id, v.to_string())).collect::<BTreeMap<_, _>>(),
+                "update_window": policy.update_window.as_ref().map(|w| w.describe()),
+            },
+            "apps": apps,
+        })
+    }
+
+    /// Write the report into the policy's `report_dir` as `<computer name>.json`.
+    pub fn write_report(&self) -> anyhow::Result<Option<PathBuf>> {
+        let Some(dir) = self.inner.policy.report_dir.clone() else { return Ok(None) };
+        std::fs::create_dir_all(&dir)?;
+        let name = sysinfo::System::host_name().unwrap_or_else(|| "computer".into());
+        let safe: String =
+            name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+        let file = dir.join(format!("{safe}.json"));
+        write_atomic(&file, serde_json::to_string_pretty(&self.report())?.as_bytes())?;
+        Ok(Some(file))
+    }
+
+    /// Put an app's settings back to how they were on first start (between classes): its
+    /// settings folders are renamed to `<folder>.reset-<time>`, so nothing is lost.
+    pub fn reset_app(&self, id: &str) -> anyhow::Result<Vec<PathBuf>> {
+        let app = self.require_app(id)?;
+        anyhow::ensure!(!self.is_running(id), "{} is open; close it first", app.name);
+        let programs = self.programs(id);
+        let stamp = github::now_secs();
+        let mut moved = Vec::new();
+        for dir in crate::app_data::data_dirs(&app, &programs) {
+            let target =
+                dir.with_file_name(format!("{}.reset-{stamp}", dir.file_name().unwrap_or_default().to_string_lossy()));
+            std::fs::rename(&dir, &target).with_context(|| format!("moving {} aside", dir.display()))?;
+            moved.push(target);
+        }
+        Ok(moved)
+    }
+
+    /// Download the packages of `ids` (every app when empty) into `dir` (default: the package
+    /// cache), for this computer or, with `all_platforms`, for every platform the apps support.
+    /// Returns the files written.
+    pub fn fill_cache(
+        &self,
+        ids: &[String],
+        dir: Option<&Path>,
+        all_platforms: bool,
+        progress: &Progress,
+    ) -> anyhow::Result<Vec<PathBuf>> {
+        let dir = dir
+            .map(Path::to_path_buf)
+            .or_else(|| self.settings().package_cache)
+            .ok_or_else(|| anyhow::anyhow!("no package cache is set (Settings › IT & Classroom, or --dir)"))?;
+        std::fs::create_dir_all(&dir)?;
+        let ids: Vec<String> =
+            if ids.is_empty() { self.catalog().apps.into_iter().map(|a| a.id).collect() } else { ids.to_vec() };
+        let mut written = Vec::new();
+        for id in ids {
+            let plan = match self.plan(&id, None) {
+                Ok(p) => p,
+                Err(err) => {
+                    log::warn!("{id}: {err:#}");
+                    continue;
+                }
+            };
+            let mut release = plan.release.clone();
+            let assets: Vec<String> = if all_platforms {
+                release
+                    .assets
+                    .iter()
+                    .map(|a| a.name.clone())
+                    .filter(|n| crate::platform::kind_from_name(&n.to_ascii_lowercase()).is_some())
+                    .collect()
+            } else {
+                vec![plan.asset.name.clone()]
+            };
+            for name in assets {
+                let _ = self.github().fill_checksum(&mut release, &name);
+                let Some(asset) = release.asset(&name).cloned() else { continue };
+                let Some(sha) = asset.sha256.clone() else {
+                    log::warn!("{name} has no checksum; not cached");
+                    continue;
+                };
+                let target = dir.join(&name);
+                if target.exists() && download::sha256_file(&target).is_ok_and(|s| s.eq_ignore_ascii_case(&sha)) {
+                    continue;
+                }
+                download::download(&self.inner.agent, &asset.url, &target, Some(&sha), progress)?;
+                written.push(target);
+            }
+        }
+        Ok(written)
+    }
+
     // ---- install ---------------------------------------------------------------------------
 
     /// Decide what to install for `id`: the latest release (or the pinned one), or `version`.
@@ -417,10 +718,21 @@ impl Manager {
             _ => None,
         };
         let version = version.or(pinned.as_ref());
-        let list = match self.releases(id) {
+        let mut list = match self.releases(id) {
             Some(l) if version.is_none_or(|v| l.find(v).is_some()) => l,
             _ => self.refresh(id, version.is_some())?,
         };
+        // An older version the list doesn't have (the API is rate limited, so only the latest is
+        // known): look the release up by its tag.
+        if let Some(v) = version.filter(|v| list.find(v).is_none()) {
+            let github = self.github();
+            if let Some(release) =
+                [format!("v{v}"), v.to_string()].iter().find_map(|tag| github.release_by_tag(&app.repo, tag).ok())
+            {
+                list.releases.push(release);
+                self.inner.releases.write().unwrap().insert(app.id.clone(), list.clone());
+            }
+        }
         let mut release = match version {
             Some(v) => list.find(v).cloned().ok_or_else(|| {
                 anyhow::anyhow!(
@@ -451,7 +763,8 @@ impl Manager {
                 anyhow::anyhow!("{} {} has no build for {}", app.name, release.tag, self.inner.platform.display())
             })?;
         if release.assets[index].sha256.is_none() {
-            if let Err(err) = self.github().fill_checksums(&mut release) {
+            let name = release.assets[index].name.clone();
+            if let Err(err) = self.github().fill_checksum(&mut release, &name) {
                 log::warn!("could not fetch checksums for {} {}: {err:#}", app.name, release.tag);
             }
         }
@@ -493,6 +806,24 @@ impl Manager {
         let downloads = self.inner.paths.downloads();
         let archive_path = downloads.join(&plan.asset.name);
         let mut delta_downloaded = None;
+        // A classroom's shared package cache: take the package from there when it's the right one.
+        let cache = settings.package_cache.clone();
+        if let (Some(cache), Some(expected)) = (&cache, &plan.asset.sha256) {
+            let cached = cache.join(&plan.asset.name);
+            if !archive_path.exists()
+                && cached.is_file()
+                && download::sha256_file(&cached).is_ok_and(|s| s.eq_ignore_ascii_case(expected))
+            {
+                log::info!("{}: from the package cache {}", plan.asset.name, cache.display());
+                if let Some(parent) = archive_path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                let tmp = archive_path.with_extension("from-cache");
+                if std::fs::copy(&cached, &tmp).is_ok() {
+                    std::fs::rename(&tmp, &archive_path)?;
+                }
+            }
+        }
         let reusable = match &plan.asset.sha256 {
             Some(expected) if archive_path.exists() => {
                 download::sha256_file(&archive_path).is_ok_and(|s| s.eq_ignore_ascii_case(expected))
@@ -519,6 +850,20 @@ impl Manager {
         };
         if plan.asset.sha256.is_none() {
             log::warn!("{} has no published checksum; installed without verification", plan.asset.name);
+        }
+        // Share it with the other computers.
+        if let Some(cache) = cache.filter(|_| settings.package_cache_write && plan.asset.sha256.is_some()) {
+            let target = cache.join(&plan.asset.name);
+            if !target.exists() {
+                let tmp = cache.join(format!(".{}.part-{}", plan.asset.name, std::process::id()));
+                let copied = std::fs::create_dir_all(&cache)
+                    .and_then(|()| std::fs::copy(&archive_path, &tmp))
+                    .and_then(|_| std::fs::rename(&tmp, &target));
+                if let Err(err) = copied {
+                    let _ = std::fs::remove_file(&tmp);
+                    log::warn!("couldn't put {} into the package cache: {err}", plan.asset.name);
+                }
+            }
         }
         progress.check_cancelled()?;
 
@@ -724,9 +1069,16 @@ impl Manager {
             if marker.exists() {
                 let _ = std::fs::remove_file(marker);
             }
-            find_executable(&dir, plan.app.binary(), self.inner.platform.os).ok_or_else(|| {
-                anyhow::anyhow!("installed {} but could not find its program in {}", plan.app.name, dir.display())
-            })
+            find_executable(&dir, plan.app.binary(), self.inner.platform.os)
+                .or_else(|| {
+                    plan.app
+                        .custom
+                        .then(|| find_any_executable(&dir, plan.app.binary(), self.inner.platform.os))
+                        .flatten()
+                })
+                .ok_or_else(|| {
+                    anyhow::anyhow!("installed {} but could not find its program in {}", plan.app.name, dir.display())
+                })
         })();
         let executable = match result {
             Ok(e) => e,
@@ -833,6 +1185,7 @@ impl Manager {
 
     /// Switch back to the version kept by the last update.
     pub fn rollback(&self, id: &str) -> anyhow::Result<InstalledApp> {
+        self.guard_managed("going back to an earlier version")?;
         let _busy = self.mark_busy(id)?;
         let app = self.require_app(id)?;
         let installed = self.installed_app(id).ok_or_else(|| anyhow::anyhow!("{} is not installed", app.name))?;
@@ -879,6 +1232,7 @@ impl Manager {
     pub fn uninstall(&self, id: &str) -> anyhow::Result<()> {
         let _busy = self.mark_busy(id)?;
         let installed = self.installed_app(id).ok_or_else(|| anyhow::anyhow!("{id} is not installed"))?;
+        self.guard_managed("uninstalling")?;
         let app_dir = installed.current.dir.as_ref().and_then(|d| d.parent()).map(Path::to_path_buf);
         if let Some(external) = &installed.current.external {
             self.uninstall_external(&installed, external)?;
@@ -1571,6 +1925,10 @@ fn merge_catalogs(mut base: Catalog, newer: Catalog) -> Catalog {
 }
 
 /// `parent/name`, or `parent/name-2`, `-3`… if taken.
+fn remote_policy_file(paths: &Paths) -> PathBuf {
+    paths.cache.join("policy-remote.json")
+}
+
 fn free_dir(parent: &Path, name: &str) -> PathBuf {
     let first = parent.join(name);
     if !first.exists() {
@@ -1600,6 +1958,51 @@ pub fn find_executable(dir: &Path, binary: &str, os: Os) -> Option<PathBuf> {
         .filter_map(Result::ok)
         .find(|e| e.file_type().is_file() && e.file_name().to_string_lossy().eq_ignore_ascii_case(&wanted))
         .map(|e| e.into_path())
+}
+
+/// For apps added from GitHub, whose program may be named anything: the only program in `dir`,
+/// or the one whose name is closest to `hint`.
+pub fn find_any_executable(dir: &Path, hint: &str, os: Os) -> Option<PathBuf> {
+    if os == Os::Macos {
+        if let Some(bundle) = integrate::macos::find_app_bundle(dir) {
+            return Some(bundle);
+        }
+    }
+    let is_program = |p: &Path| {
+        let name = p.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        if os == Os::Windows {
+            return name.ends_with(".exe")
+                && !["unins", "uninstall", "setup", "install"].iter().any(|w| name.starts_with(w));
+        }
+        if name.ends_with(".appimage") {
+            return true;
+        }
+        if name.contains('.') && !name.ends_with(".bin") {
+            return false;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            return std::fs::metadata(p).is_ok_and(|m| m.permissions().mode() & 0o111 != 0);
+        }
+        #[allow(unreachable_code)]
+        false
+    };
+    let programs: Vec<PathBuf> = walkdir::WalkDir::new(dir)
+        .max_depth(4)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file() && is_program(e.path()))
+        .map(|e| e.into_path())
+        .collect();
+    let hint = hint.to_ascii_lowercase();
+    let stem = |p: &PathBuf| p.file_stem().map(|s| s.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    programs
+        .iter()
+        .find(|p| stem(p) == hint)
+        .or_else(|| programs.iter().find(|p| stem(p).contains(&hint) || hint.contains(&stem(p))))
+        .or_else(|| (programs.len() == 1).then(|| &programs[0]))
+        .cloned()
 }
 
 /// Where a system installer put the app: its Settings › Apps entry, or the usual folders.
@@ -1673,6 +2076,98 @@ mod tests {
             asset: Asset { name, size: None, url: "http://invalid.invalid/".into(), sha256: Some(sha) },
             kind,
             location: None,
+        }
+    }
+
+    #[test]
+    fn a_shared_package_cache_is_used_and_filled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let share = tmp.path().join("share");
+        // Computer A downloads (here: has the package) and shares it.
+        let a = manager(&tmp.path().join("a"));
+        let mut s = a.settings();
+        s.package_cache = Some(share.clone());
+        s.package_cache_write = true;
+        a.set_settings(s).unwrap();
+        let plan = local_plan(&a, "0.3.0");
+        no_progress(|p| a.install(&plan, p)).unwrap();
+        assert!(share.join(&plan.asset.name).is_file(), "put into the share");
+
+        // Computer B has nothing downloaded and no network (the URL is invalid): the share has it.
+        let b = manager(&tmp.path().join("b"));
+        let mut s = b.settings();
+        s.package_cache = Some(share.clone());
+        b.set_settings(s).unwrap();
+        let mut plan_b = plan.clone();
+        plan_b.app = b.app("photocraft").unwrap();
+        assert!(!b.paths().downloads().join(&plan.asset.name).exists());
+        let installed = no_progress(|p| b.install(&plan_b, p)).unwrap();
+        assert_eq!(installed.current.version, Version::new(0, 3, 0));
+
+        // A tampered file in the share isn't used.
+        std::fs::write(share.join(&plan.asset.name), b"not the package").unwrap();
+        let c = manager(&tmp.path().join("c"));
+        let mut s = c.settings();
+        s.package_cache = Some(share);
+        c.set_settings(s).unwrap();
+        assert!(no_progress(|p| c.install(&plan_b, p)).is_err());
+    }
+
+    #[test]
+    fn the_report_lists_installed_apps() {
+        let tmp = tempfile::tempdir().unwrap();
+        let m = manager(tmp.path());
+        no_progress(|p| m.install(&local_plan(&m, "0.3.0"), p)).unwrap();
+        let report = m.report();
+        assert_eq!(report["apps"][0]["id"], "photocraft");
+        assert_eq!(report["apps"][0]["version"], "0.3.0");
+        assert!(report["craftspace"].is_string() && report["platform"].is_string());
+    }
+
+    #[test]
+    fn a_managed_computer_keeps_its_apps() {
+        if crate::platform::is_elevated() {
+            return; // Administrators may; the check is for everyone else.
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let policy: Policy = serde_json::from_str(
+            r#"{"prevent_uninstall": true, "organization": "Riverside", "support": "it@riverside.example"}"#,
+        )
+        .unwrap();
+        let m = Manager::open_with_policy(Paths::under(tmp.path().join("p")), policy).unwrap();
+        let mut plan = local_plan(&m, "0.3.0");
+        plan.app = m.app("photocraft").unwrap();
+        no_progress(|p| m.install(&plan, p)).unwrap();
+        let err = m.uninstall("photocraft").unwrap_err().to_string();
+        assert!(err.contains("Riverside") && err.contains("it@riverside.example"), "{err}");
+        assert!(m.installed_app("photocraft").is_some());
+    }
+
+    #[test]
+    fn programs_of_apps_from_github_are_found_by_any_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let os = Platform::current().os;
+        let dir = tmp.path().join("ripgrep-14.1.1-x86_64");
+        std::fs::create_dir_all(dir.join("doc")).unwrap();
+        let exe = |name: &str| if os == Os::Windows { format!("{name}.exe") } else { name.to_string() };
+        let write = |p: &Path| {
+            std::fs::write(p, b"x").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        };
+        std::fs::write(dir.join("README.md"), b"x").unwrap();
+        std::fs::write(dir.join("doc/rg.1"), b"x").unwrap();
+        write(&dir.join(exe("rg")));
+        if os != Os::Macos {
+            // The only program, though named differently from the repository.
+            assert_eq!(find_any_executable(&dir, "ripgrep", os), Some(dir.join(exe("rg"))));
+            // With several, the one matching the name wins.
+            write(&dir.join(exe("helper")));
+            assert_eq!(find_any_executable(&dir, "rg", os), Some(dir.join(exe("rg"))));
+            assert_eq!(find_any_executable(&dir, "ripgrep", os), None);
         }
     }
 
