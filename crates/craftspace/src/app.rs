@@ -184,7 +184,7 @@ pub struct CraftSpaceApp {
     pub bus: Bus,
     rx: Receiver<Msg>,
     pub palette: Palette,
-    applied_theme: Option<(craftspace_core::settings::Theme, bool)>,
+    applied_theme: Option<(craftspace_core::settings::Theme, craftspace_core::settings::Appearance, bool)>,
 
     pub tab: Tab,
     pub apps_view: AppsView,
@@ -284,7 +284,7 @@ impl CraftSpaceApp {
         let (tx, rx) = channel();
         let bus = Bus::new(tx, cc.egui_ctx.clone());
         let settings = manager.settings();
-        let palette = theme::palette_for(settings.theme, &cc.egui_ctx);
+        let palette = theme::palette_for(settings.theme, settings.appearance, &cc.egui_ctx);
         let (tray_tx, tray_rx) = channel();
         let tray = Tray::new(&cc.egui_ctx, tray_tx);
         if tray.is_some() {
@@ -391,7 +391,7 @@ impl CraftSpaceApp {
                 cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
             }
         }
-        // `CRAFTSPACE_VIEW=files|discover|updates|installed|addons|app:<id>` opens a specific
+        // `CRAFTSPACE_VIEW=files|discover|updates|installed|addons|settings|app:<id>` opens a specific
         // page (handy for screenshots and for jumping straight somewhere from a shortcut).
         if let Ok(view) = std::env::var("CRAFTSPACE_VIEW") {
             match view.as_str() {
@@ -405,6 +405,7 @@ impl CraftSpaceApp {
                     app.addon_repos_tab = true;
                 }
                 "about" => app.about_open = true,
+                "settings" => app.settings_draft = Some(app.settings.clone()),
                 other => {
                     if let Some(rest) = other.strip_prefix("app:") {
                         let (id, tab) = rest.split_once(':').unwrap_or((rest, ""));
@@ -1890,10 +1891,11 @@ impl eframe::App for CraftSpaceApp {
 
         // Theme.
         let system_light = ctx.system_theme() == Some(egui::Theme::Light);
-        if self.applied_theme != Some((self.settings.theme, system_light)) {
-            self.palette = theme::palette_for(self.settings.theme, &ctx);
+        let look = (self.settings.theme, self.settings.appearance, system_light);
+        if self.applied_theme != Some(look) {
+            self.palette = theme::palette_for(self.settings.theme, self.settings.appearance, &ctx);
             theme::apply(&ctx, &self.palette);
-            self.applied_theme = Some((self.settings.theme, system_light));
+            self.applied_theme = Some(look);
         }
 
         // Closing: confirm during installs, else hide to the tray if that's on.

@@ -1,5 +1,6 @@
 //! The Discover tab: a featured app, what's new across all apps, apps to try, and links.
 
+use craftspace_core::settings::Buttons;
 use craftspace_core::AppState;
 use eframe::egui::{self, Align, Color32, CornerRadius, Layout, Margin, RichText, Sense, Ui, Vec2};
 
@@ -59,14 +60,9 @@ fn hero(app: &mut CraftSpaceApp, ui: &mut Ui) {
     match theme::icon_texture(ui.ctx(), &s.app.id) {
         Some(texture) => egui::Image::new(&texture).corner_radius(CornerRadius::same(32)).paint_at(ui, art),
         None => {
-            painter.rect_filled(art, CornerRadius::same(30), bg.gamma_multiply(0.85));
-            painter.rect_stroke(
-                art.shrink(6.0),
-                CornerRadius::same(26),
-                egui::Stroke::new(6.0, fg),
-                egui::StrokeKind::Inside,
-            );
-            painter.text(art.center(), egui::Align2::CENTER_CENTER, &s.app.code, egui::FontId::proportional(68.0), fg);
+            // On the gradient, without a card behind it.
+            let on_gradient = theme::Palette { card: Color32::TRANSPARENT, ..app.palette };
+            theme::placeholder(&painter, &on_gradient, on_gradient.look.placeholder, &s.app, art);
         }
     }
 
@@ -93,11 +89,15 @@ fn hero(app: &mut CraftSpaceApp, ui: &mut Ui) {
         } else {
             "Install"
         };
+        let (fill, stroke) = match p.look.buttons {
+            Buttons::Outlined => (Color32::TRANSPARENT, egui::Stroke::new(1.5, Color32::WHITE)),
+            Buttons::Filled => (Color32::from_white_alpha(46), egui::Stroke::NONE),
+        };
         let b = ui.add(
             egui::Button::new(RichText::new(label).color(Color32::WHITE).strong())
-                .fill(Color32::TRANSPARENT)
-                .stroke(egui::Stroke::new(1.5, Color32::WHITE))
-                .corner_radius(15)
+                .fill(fill)
+                .stroke(stroke)
+                .corner_radius(p.radius(15.0))
                 .min_size(Vec2::new(96.0, 30.0)),
         );
         if b.clicked() {

@@ -80,6 +80,90 @@ pub struct Settings {
     pub addon_stores: AddonStores,
     /// macOS: how the Dock shows CraftSpace's icon.
     pub dock_icon: DockIcon,
+    /// Accent colour, icon placeholders, buttons and corners.
+    pub appearance: Appearance,
+}
+
+/// How CraftSpace looks besides light and dark, including options that move it away from the
+/// Creative Cloud look it started from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Appearance {
+    pub accent: Accent,
+    /// What stands in for an app's icon until it's downloaded.
+    pub placeholder: Placeholder,
+    pub buttons: Buttons,
+    pub corners: Corners,
+}
+
+impl Appearance {
+    /// CraftSpace's own look: soft placeholders, filled buttons, round corners.
+    pub const CRAFTSPACE: Appearance = Appearance {
+        accent: Accent::Lime,
+        placeholder: Placeholder::Soft,
+        buttons: Buttons::Filled,
+        corners: Corners::Round,
+    };
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Accent {
+    /// The lime of CraftSpace's logo.
+    #[default]
+    Lime,
+    Coral,
+    Amber,
+    Mint,
+    Violet,
+    Pink,
+}
+
+impl Accent {
+    pub const ALL: [Accent; 6] =
+        [Accent::Lime, Accent::Coral, Accent::Amber, Accent::Mint, Accent::Violet, Accent::Pink];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Accent::Lime => "Lime",
+            Accent::Coral => "Coral",
+            Accent::Amber => "Amber",
+            Accent::Mint => "Mint",
+            Accent::Violet => "Violet",
+            Accent::Pink => "Pink",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Placeholder {
+    /// The app's two-letter code on its colour.
+    #[default]
+    Code,
+    /// The app's first letter on a light tint of its colour.
+    Soft,
+    /// The app's first letter in a circle of its colour.
+    Letter,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Buttons {
+    /// Outlined, rounded buttons.
+    #[default]
+    Outlined,
+    /// Buttons filled with a soft background, no outline.
+    Filled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Corners {
+    Square,
+    #[default]
+    Standard,
+    Round,
 }
 
 /// The Dock icon on macOS. When macOS draws it (the icon in the app), it follows the icon style
@@ -226,6 +310,7 @@ impl Default for Settings {
             package_cache: None,
             package_cache_write: false,
             dock_icon: DockIcon::default(),
+            appearance: Appearance::default(),
             addon_stores: AddonStores::default(),
         }
     }
@@ -301,6 +386,19 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn appearance_is_saved_by_name() {
+        let s: Settings =
+            serde_json::from_str(r#"{"appearance": {"placeholder": "soft", "accent": "coral"}}"#).unwrap();
+        assert_eq!(s.appearance.placeholder, Placeholder::Soft);
+        assert_eq!(s.appearance.accent, Accent::Coral);
+        assert_eq!(s.appearance.corners, Corners::Standard, "missing parts keep their defaults");
+        let json =
+            serde_json::to_value(Settings { appearance: Appearance::CRAFTSPACE, ..Settings::default() }).unwrap();
+        assert_eq!(json["appearance"]["buttons"], "filled");
+        assert_eq!(serde_json::from_str::<Settings>("{}").unwrap().appearance, Appearance::default());
+    }
 
     #[test]
     fn round_trips_and_tolerates_missing_fields() {
