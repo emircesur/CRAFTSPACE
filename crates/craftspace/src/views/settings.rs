@@ -4,7 +4,7 @@
 use craftspace_core::platform::Os;
 use craftspace_core::policy::Policy;
 use craftspace_core::settings::{Settings, Theme};
-use eframe::egui::{self, Align, Layout, RichText, Ui};
+use eframe::egui::{self, Align, Layout, RichText, Ui, Vec2};
 
 use crate::app::{Action, CraftSpaceApp};
 use crate::theme;
@@ -168,6 +168,7 @@ pub fn window(app: &mut CraftSpaceApp, ctx: &egui::Context) {
                 ui.selectable_value(&mut draft.theme, Theme::Light, "Light");
                 ui.selectable_value(&mut draft.theme, Theme::System, "Match system");
             });
+            appearance(ui, &p, &mut draft.appearance);
             if os == Os::Macos {
                 use craftspace_core::settings::DockIcon;
                 ui.add_space(4.0);
@@ -432,6 +433,73 @@ fn it_section(app: &mut CraftSpaceApp, ui: &mut Ui, p: &theme::Palette, policy: 
 
 fn names(app: &CraftSpaceApp, ids: &[String]) -> String {
     ids.iter().map(|id| app.app_name(id)).collect::<Vec<_>>().join(", ")
+}
+
+/// Accent colour, icon placeholders, buttons and corners.
+fn appearance(ui: &mut Ui, p: &theme::Palette, look: &mut craftspace_core::settings::Appearance) {
+    use craftspace_core::settings::{Accent, Appearance, Buttons, Corners, Placeholder};
+    ui.add_space(6.0);
+    ui.label("Accent colour");
+    ui.horizontal(|ui| {
+        for accent in Accent::ALL {
+            let (rect, resp) = ui.allocate_exact_size(Vec2::splat(26.0), egui::Sense::click());
+            let color = theme::accent_swatch(accent, p.dark);
+            ui.painter().circle_filled(rect.center(), 10.0, color);
+            if look.accent == accent {
+                ui.painter().circle_stroke(rect.center(), 12.5, egui::Stroke::new(2.0, p.text));
+            }
+            if resp.on_hover_text(accent.label()).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                look.accent = accent;
+            }
+        }
+    });
+
+    ui.add_space(6.0);
+    ui.label("App icons, until they've downloaded");
+    let sample = craftspace_core::Catalog::builtin().apps.into_iter().find(|a| a.id == "photocraft");
+    ui.horizontal(|ui| {
+        for (style, label) in
+            [(Placeholder::Code, "Two-letter code"), (Placeholder::Soft, "Soft tile"), (Placeholder::Letter, "Letter")]
+        {
+            ui.allocate_ui(Vec2::new(130.0, 72.0), |ui| {
+                ui.vertical_centered(|ui| {
+                    if let Some(app) = &sample {
+                        let (rect, resp) = ui.allocate_exact_size(Vec2::splat(40.0), egui::Sense::click());
+                        let preview = theme::Palette { look: Appearance { placeholder: style, ..*look }, ..*p };
+                        theme::placeholder(ui.painter(), &preview, style, app, rect);
+                        if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                            look.placeholder = style;
+                        }
+                    }
+                    ui.radio_value(&mut look.placeholder, style, label);
+                });
+            });
+        }
+    });
+
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.label("Buttons");
+        ui.selectable_value(&mut look.buttons, Buttons::Outlined, "Outlined");
+        ui.selectable_value(&mut look.buttons, Buttons::Filled, "Filled");
+        ui.add_space(16.0);
+        ui.label("Corners");
+        ui.selectable_value(&mut look.corners, Corners::Square, "Square");
+        ui.selectable_value(&mut look.corners, Corners::Standard, "Standard");
+        ui.selectable_value(&mut look.corners, Corners::Round, "Round");
+    });
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        let own = Appearance { accent: look.accent, ..Appearance::CRAFTSPACE };
+        if ui.add_enabled(*look != own, egui::Button::new("Use the CraftSpace look")).clicked() {
+            *look = own;
+        }
+        ui.label(
+            RichText::new("Soft tiles, filled buttons and round corners, unlike Creative Cloud.")
+                .size(12.0)
+                .color(p.weak),
+        );
+    });
 }
 
 fn section(ui: &mut Ui, p: &crate::theme::Palette, title: &str) {

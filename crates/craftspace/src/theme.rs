@@ -1,9 +1,9 @@
 //! Colors, the egui style, and small shared widgets (app badges, pill buttons, cards).
 
-use craftspace_core::settings::Theme;
+use craftspace_core::settings::{Accent, Appearance, Buttons, Corners, Placeholder, Theme};
 use craftspace_core::AppEntry;
 use eframe::egui::{
-    self, Align2, Color32, CornerRadius, FontId, Frame, Margin, Response, RichText, Sense, Stroke, StrokeKind, Ui, Vec2,
+    self, Align2, Color32, CornerRadius, FontId, Frame, Margin, Response, RichText, Sense, Stroke, Ui, Vec2,
 };
 
 #[derive(Clone, Copy)]
@@ -21,6 +21,42 @@ pub struct Palette {
     pub warn: Color32,
     pub bad: Color32,
     pub dark: bool,
+    pub look: Appearance,
+}
+
+impl Palette {
+    /// A corner radius of `base` points, scaled for the chosen corners.
+    pub fn radius(&self, base: f32) -> CornerRadius {
+        let scale = match self.look.corners {
+            Corners::Square => 0.35,
+            Corners::Standard => 1.0,
+            Corners::Round => 1.6,
+        };
+        CornerRadius::same((base * scale).round().min(255.0) as u8)
+    }
+}
+
+/// The accent colour and the text that goes on it, for dark and light.
+fn accent_colors(accent: Accent, dark: bool) -> (Color32, Color32) {
+    let on_dark = Color32::from_rgb(0x17, 0x19, 0x0A);
+    let (dark_accent, light_accent) = match accent {
+        Accent::Lime => return if dark { (DARK.accent, DARK.accent_text) } else { (LIGHT.accent, LIGHT.accent_text) },
+        Accent::Coral => (Color32::from_rgb(0xFF, 0x7E, 0x6B), Color32::from_rgb(0xC2, 0x3F, 0x2C)),
+        Accent::Amber => (Color32::from_rgb(0xFF, 0xC1, 0x3D), Color32::from_rgb(0xA3, 0x5F, 0x00)),
+        Accent::Mint => (Color32::from_rgb(0x52, 0xE5, 0xB2), Color32::from_rgb(0x0B, 0x7D, 0x58)),
+        Accent::Violet => (Color32::from_rgb(0xB8, 0xA2, 0xFF), Color32::from_rgb(0x67, 0x43, 0xD4)),
+        Accent::Pink => (Color32::from_rgb(0xFF, 0x8F, 0xCB), Color32::from_rgb(0xBE, 0x2D, 0x7C)),
+    };
+    if dark {
+        (dark_accent, on_dark)
+    } else {
+        (light_accent, Color32::WHITE)
+    }
+}
+
+/// The swatch shown for `accent` in Settings.
+pub fn accent_swatch(accent: Accent, dark: bool) -> Color32 {
+    accent_colors(accent, dark).0
 }
 
 pub const DARK: Palette = Palette {
@@ -38,6 +74,7 @@ pub const DARK: Palette = Palette {
     warn: Color32::from_rgb(0xF5, 0xA5, 0x24),
     bad: Color32::from_rgb(0xF0, 0x5A, 0x5A),
     dark: true,
+    look: DEFAULT_LOOK,
 };
 
 pub const LIGHT: Palette = Palette {
@@ -55,10 +92,18 @@ pub const LIGHT: Palette = Palette {
     warn: Color32::from_rgb(0xC2, 0x7A, 0x00),
     bad: Color32::from_rgb(0xD0, 0x3B, 0x3B),
     dark: false,
+    look: DEFAULT_LOOK,
 };
 
-pub fn palette_for(theme: Theme, ctx: &egui::Context) -> Palette {
-    match theme {
+const DEFAULT_LOOK: Appearance = Appearance {
+    accent: Accent::Lime,
+    placeholder: Placeholder::Code,
+    buttons: Buttons::Outlined,
+    corners: Corners::Standard,
+};
+
+pub fn palette_for(theme: Theme, look: Appearance, ctx: &egui::Context) -> Palette {
+    let base = match theme {
         Theme::Dark => DARK,
         Theme::Light => LIGHT,
         Theme::System => {
@@ -68,10 +113,22 @@ pub fn palette_for(theme: Theme, ctx: &egui::Context) -> Palette {
                 DARK
             }
         }
-    }
+    };
+    let (accent, accent_text) = accent_colors(look.accent, base.dark);
+    Palette { accent, accent_text, look, ..base }
+}
+
+fn palette_id() -> egui::Id {
+    egui::Id::new("craftspace-palette")
+}
+
+/// The palette last applied, for widgets that aren't handed one.
+pub fn current(ctx: &egui::Context) -> Palette {
+    ctx.data(|d| d.get_temp(palette_id())).unwrap_or(DARK)
 }
 
 pub fn apply(ctx: &egui::Context, p: &Palette) {
+    ctx.data_mut(|d| d.insert_temp(palette_id(), *p));
     ctx.set_theme(if p.dark { egui::Theme::Dark } else { egui::Theme::Light });
     let mut visuals = if p.dark { egui::Visuals::dark() } else { egui::Visuals::light() };
     visuals.panel_fill = p.bg;
@@ -80,8 +137,8 @@ pub fn apply(ctx: &egui::Context, p: &Palette) {
         if p.dark { Color32::from_rgb(0x15, 0x15, 0x17) } else { Color32::from_rgb(0xEC, 0xEE, 0xF2) };
     visuals.faint_bg_color = p.card;
     visuals.window_stroke = Stroke::new(1.0, p.stroke);
-    visuals.window_corner_radius = CornerRadius::same(12);
-    visuals.menu_corner_radius = CornerRadius::same(8);
+    visuals.window_corner_radius = p.radius(12.0);
+    visuals.menu_corner_radius = p.radius(8.0);
     visuals.selection.bg_fill = p.accent.gamma_multiply(0.35);
     visuals.selection.stroke = Stroke::new(1.0, p.accent);
     visuals.hyperlink_color = p.accent;
@@ -92,7 +149,10 @@ pub fn apply(ctx: &egui::Context, p: &Palette) {
         &mut visuals.widgets.active,
         &mut visuals.widgets.open,
     ] {
-        w.corner_radius = CornerRadius::same(6);
+        w.corner_radius = p.radius(6.0);
+        if p.look.buttons == Buttons::Filled {
+            w.bg_stroke = Stroke::NONE;
+        }
     }
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, p.stroke);
     visuals.widgets.inactive.weak_bg_fill = p.card;
@@ -168,7 +228,7 @@ pub fn load_icons(ctx: &egui::Context, manager: &craftspace_core::Manager, only:
     }
 }
 
-/// The app's own icon, or (until it's downloaded) a rounded square with its two-letter code.
+/// The app's own icon, or (until it's downloaded) a placeholder in the chosen style.
 pub fn badge(ui: &mut Ui, app: &AppEntry, size: f32) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
     let texture: Option<egui::TextureHandle> = ui.ctx().data(|d| d.get_temp(icon_id(&app.id)));
@@ -179,28 +239,55 @@ pub fn badge(ui: &mut Ui, app: &AppEntry, size: f32) -> Response {
         return response;
     }
     if ui.is_rect_visible(rect) {
-        let painter = ui.painter();
-        let radius = CornerRadius::same((size * 0.2) as u8);
-        let fg = hex(&app.colors.fg);
-        painter.rect_filled(rect, radius, hex(&app.colors.bg));
-        painter.rect_stroke(
-            rect.shrink(size * 0.04),
-            radius,
-            Stroke::new((size * 0.045).max(1.0), fg),
-            StrokeKind::Inside,
-        );
-        painter.text(rect.center(), Align2::CENTER_CENTER, &app.code, FontId::proportional(size * 0.44), fg);
+        let p = current(ui.ctx());
+        placeholder(ui.painter(), &p, p.look.placeholder, app, rect);
     }
     response
 }
 
-/// A rounded, outlined button like Creative Cloud's "Open".
+/// Stand-in for an app's icon: its colours and its code or first letter, without an outline.
+pub fn placeholder(painter: &egui::Painter, p: &Palette, style: Placeholder, app: &AppEntry, rect: egui::Rect) {
+    let size = rect.width().min(rect.height());
+    let (bg, fg) = (hex(&app.colors.bg), hex(&app.colors.fg));
+    let rounded = |share: f32| {
+        let scale = match p.look.corners {
+            Corners::Square => 0.45,
+            Corners::Standard => 1.0,
+            Corners::Round => 1.35,
+        };
+        CornerRadius::same((size * share * scale).min(size / 2.0) as u8)
+    };
+    let initial = app.name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default();
+    match style {
+        Placeholder::Code => {
+            painter.rect_filled(rect, rounded(0.22), bg);
+            painter.text(rect.center(), Align2::CENTER_CENTER, &app.code, FontId::proportional(size * 0.42), fg);
+        }
+        Placeholder::Soft => {
+            let tint = if p.dark { fg.gamma_multiply(0.22) } else { fg.gamma_multiply(0.16) };
+            painter.rect_filled(rect, rounded(0.3), p.card);
+            painter.rect_filled(rect, rounded(0.3), tint);
+            let text = if p.dark { fg } else { bg };
+            painter.text(rect.center(), Align2::CENTER_CENTER, initial, FontId::proportional(size * 0.5), text);
+        }
+        Placeholder::Letter => {
+            painter.circle_filled(rect.center(), size / 2.0, fg);
+            painter.text(rect.center(), Align2::CENTER_CENTER, initial, FontId::proportional(size * 0.5), bg);
+        }
+    }
+}
+
+/// A secondary button: outlined, or filled with a soft background (Settings › Appearance).
 pub fn pill(ui: &mut Ui, p: &Palette, text: &str) -> Response {
+    let (fill, stroke) = match p.look.buttons {
+        Buttons::Outlined => (Color32::TRANSPARENT, Stroke::new(1.5, p.weak)),
+        Buttons::Filled => (if p.dark { p.stroke } else { Color32::from_rgb(0xE9, 0xE9, 0xEE) }, Stroke::NONE),
+    };
     ui.add(
         egui::Button::new(RichText::new(text).color(p.text))
-            .fill(Color32::TRANSPARENT)
-            .stroke(Stroke::new(1.5, p.weak))
-            .corner_radius(CornerRadius::same(15))
+            .fill(fill)
+            .stroke(stroke)
+            .corner_radius(p.radius(15.0))
             .min_size(Vec2::new(64.0, 30.0)),
     )
 }
@@ -211,7 +298,7 @@ pub fn primary(ui: &mut Ui, p: &Palette, text: &str) -> Response {
         egui::Button::new(RichText::new(text).color(p.accent_text).strong())
             .fill(p.accent)
             .stroke(Stroke::NONE)
-            .corner_radius(CornerRadius::same(15))
+            .corner_radius(p.radius(15.0))
             .min_size(Vec2::new(64.0, 30.0)),
     )
 }
@@ -220,7 +307,7 @@ pub fn card_frame(p: &Palette, hovered: bool) -> Frame {
     Frame::new()
         .fill(if hovered { p.card_hover } else { p.card })
         .stroke(Stroke::new(1.0, p.stroke))
-        .corner_radius(CornerRadius::same(10))
+        .corner_radius(p.radius(10.0))
         .inner_margin(Margin::same(16))
 }
 
