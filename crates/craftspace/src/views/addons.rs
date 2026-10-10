@@ -334,6 +334,9 @@ fn addon_card(app: &mut CraftSpaceApp, ui: &mut Ui, a: &craftspace_core::addons:
                     }
                 } else if file.is_none() {
                     ui.label(RichText::new(format!("Not for {}", platform.display())).size(12.0).color(p.weak));
+                } else if let Some(needed) = a.needs_newer() {
+                    ui.label(RichText::new(format!("Needs CraftSpace {needed}")).size(12.0).color(p.weak))
+                        .on_hover_text("Update CraftSpace to install it");
                 } else if blocked && !a.checked() {
                     ui.label(RichText::new("Not allowed here").size(12.0).color(p.weak))
                         .on_hover_text("Your organization allows only add-ons checked by CraftSpace");

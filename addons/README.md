@@ -59,6 +59,10 @@ Or add it yourself in a pull request:
 
 4. `python3 addons/validate.py --download` must pass (CI runs it on your pull request).
 
+An add-on that uses an install step newer CraftSpace versions added (such as `actions`, from
+0.1.5) says so with `"requires": "0.1.5"`: older versions then show *Needs CraftSpace 0.1.5*
+instead of an Install button.
+
 Submissions are always `"trust": "unchecked"`. Don't submit anything you may not share, or any
 Adobe (or other vendors') presets, brushes or assets.
 

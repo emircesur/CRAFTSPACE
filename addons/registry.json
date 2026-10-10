@@ -158,6 +158,7 @@
       "name": "Doom for PhotoCraft",
       "kind": "plugin",
       "version": "1.0.0",
+      "requires": "0.1.5",
       "author": "CraftSpace",
       "license": "GPL-2.0-or-later AND BSD-3-Clause",
       "trust": "checked",

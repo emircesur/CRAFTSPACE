@@ -69,6 +69,12 @@ def main():
                 err(where, f"{f.get('url')}: needs its SHA-256 (python3 addons/pin.py URL)")
             if f.get("platform") is not None and f["platform"] not in PLATFORMS:
                 err(where, f"platform is one of {sorted(PLATFORMS)}")
+        req = a.get("requires")
+        if req is not None and not re.match(r"^\d+\.\d+\.\d+$", str(req)):
+            err(where, 'requires is a CraftSpace version, like "0.1.5"')
+        if any(s.get("to") == "actions" for s in a.get("install", [])):
+            if tuple(int(x) for x in re.findall(r"\d+", str(req or "0"))[:3]) < (0, 1, 5):
+                err(where, 'an "actions" step needs "requires": "0.1.5" (older CraftSpace can\'t install it)')
         for step in a.get("install", []):
             app, to = step.get("app"), step.get("to", "")
             if app not in apps:

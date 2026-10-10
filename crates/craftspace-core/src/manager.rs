@@ -2234,6 +2234,9 @@ impl Manager {
             .into_iter()
             .find(|a| a.id == id)
             .ok_or_else(|| anyhow::anyhow!("unknown add-on {id} (see `craftspace-cli addons list`)"))?;
+        if let Some(needed) = addon.needs_newer() {
+            anyhow::bail!("{} needs CraftSpace {needed} or newer; update CraftSpace first", addon.name);
+        }
         if !addon.checked() {
             anyhow::ensure!(
                 !self.inner.policy.block_unchecked_addons,
@@ -2251,7 +2254,9 @@ impl Manager {
             .file_for(platform)
             .ok_or_else(|| anyhow::anyhow!("{} has no download for {}", addon.name, platform.display()))?
             .clone();
-        anyhow::ensure!(file.url.starts_with("https://"), "{} isn't downloaded over https", addon.name);
+        // Tests serve their downloads from a local server.
+        let local_test = cfg!(test) && file.url.starts_with("http://127.0.0.1");
+        anyhow::ensure!(file.url.starts_with("https://") || local_test, "{} isn't downloaded over https", addon.name);
         anyhow::ensure!(file.sha256.is_some() || !addon.checked(), "{} has no checksum in the registry", addon.name);
 
         // Download, and unpack archives.
@@ -2784,6 +2789,55 @@ mod tests {
         s.remote_catalog = false;
         m.set_settings(s).unwrap();
         m
+    }
+
+    #[test]
+    fn installing_an_addon_with_photocraft_actions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let m = manager(tmp.path());
+        let config = tmp.path().join("photocraft-config");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(config.join("preferences.json"), r#"{"shortcuts":{"edit.example":"Alt+Shift+F"}}"#).unwrap();
+        std::env::set_var("PHOTOCRAFT_CONFIG_DIR", &config);
+
+        let actions = include_bytes!("../../../addons/doom/photocraft/doom-actions.json");
+        let zip = tmp.path().join("doom.zip");
+        make_zip(&zip, &[("doom-photocraft.wasm", b"\0asm"), ("doom-actions.json", actions)]);
+        let entry = |id: &str, requires: &str| {
+            serde_json::json!({
+                "id": id, "name": id, "kind": "plugin", "trust": "checked", "author": "CraftSpace",
+                "apps": ["photocraft"], "requires": requires,
+                "files": [{"url": format!("{}/doom.zip", crate::download::tests::serve(std::fs::read(&zip).unwrap()).trim_end_matches('/')),
+                           "sha256": crate::download::sha256_file(&zip).unwrap()}],
+                "install": [{"app": "photocraft", "to": "plugins", "files": ["doom-photocraft.wasm"]},
+                            {"app": "photocraft", "to": "actions", "files": ["doom-actions.json"]}]
+            })
+        };
+        let registry = serde_json::json!({"format": "craftspace-addons", "version": 1,
+            "addons": [entry("doom", "0.1.5"), entry("future", "999.0.0")]});
+        std::fs::create_dir_all(m.addons_cache()).unwrap();
+        std::fs::write(m.addons_cache().join("registry.json"), registry.to_string()).unwrap();
+
+        let err = no_progress(|p| m.install_addon("future", false, p)).unwrap_err().to_string();
+        assert!(err.contains("needs CraftSpace 999.0.0 or newer"), "{err}");
+
+        no_progress(|p| m.install_addon("doom", false, p)).unwrap();
+        let read = |p: &Path| -> serde_json::Value { serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap() };
+        let list = read(&config.join("Presets/actions.json"));
+        assert_eq!(list["actions"].as_array().unwrap().len(), 17);
+        let prefs = read(&config.join("preferences.json"));
+        assert_eq!(prefs["shortcuts"]["actions.play:Doom: Forward"], "Alt+Shift+W");
+        assert!(prefs["shortcuts"].get("actions.play:Doom: Fire").is_none(), "a key already used was taken");
+        let plugins = prefs["plugIns"]["additionalPluginsFolder"].as_str().map(PathBuf::from);
+        assert!(plugins.is_some_and(|d| d.join("doom-photocraft.wasm").is_file()), "{prefs}");
+
+        m.uninstall_addon("doom").unwrap();
+        assert!(read(&config.join("Presets/actions.json"))["actions"].as_array().unwrap().is_empty());
+        assert_eq!(
+            read(&config.join("preferences.json"))["shortcuts"],
+            serde_json::json!({"edit.example": "Alt+Shift+F"})
+        );
+        std::env::remove_var("PHOTOCRAFT_CONFIG_DIR");
     }
 
     /// A plan whose asset is already sitting in the downloads folder with the right checksum,

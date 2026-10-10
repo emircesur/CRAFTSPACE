@@ -118,6 +118,9 @@ pub struct Addon {
     pub files: Vec<File>,
     #[serde(default)]
     pub install: Vec<Step>,
+    /// The oldest CraftSpace that can install it (for install steps added later), e.g. `"0.1.5"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires: Option<String>,
     /// Where it was listed: the registry, or a store's name.
     #[serde(default)]
     pub source: String,
@@ -141,6 +144,12 @@ impl Addon {
 
     pub fn checked(&self) -> bool {
         self.trust == Trust::Checked
+    }
+
+    /// The newer CraftSpace this add-on needs, when this one is too old for it.
+    pub fn needs_newer(&self) -> Option<semver::Version> {
+        let needed = crate::version::parse_tag(self.requires.as_deref()?)?;
+        (needed > crate::selfupdate::current_version()).then_some(needed)
     }
 }
 
@@ -418,6 +427,7 @@ fn artcraft_store_entry(store: &Store, p: &Value) -> Option<Addon> {
         trust: Trust::Unchecked,
         files: vec![File { platform: None, url, sha256: s("sha256") }],
         install: vec![step],
+        requires: None,
         source: store.name.clone(),
     })
 }
@@ -591,6 +601,34 @@ pub struct Report {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn addons_can_need_a_newer_craftspace() {
+        let addon = |requires: Option<&str>| Addon {
+            id: "a".into(),
+            name: "A".into(),
+            kind: Kind::Plugin,
+            version: None,
+            author: None,
+            license: None,
+            description: String::new(),
+            apps: vec![],
+            tags: vec![],
+            homepage: None,
+            trust: Trust::Unchecked,
+            files: vec![],
+            install: vec![],
+            requires: requires.map(Into::into),
+            source: String::new(),
+        };
+        assert_eq!(addon(None).needs_newer(), None);
+        assert_eq!(addon(Some("0.1.0")).needs_newer(), None);
+        assert_eq!(addon(Some(env!("CARGO_PKG_VERSION"))).needs_newer(), None);
+        assert_eq!(addon(Some("999.0.0")).needs_newer(), Some(semver::Version::new(999, 0, 0)));
+        // A registry entry older CraftSpace versions don't understand still parses.
+        let parsed: Addon = serde_json::from_str(r#"{"id":"a","name":"A","requires":"999.0"}"#).unwrap();
+        assert!(parsed.needs_newer().is_some());
+    }
 
     #[test]
     fn the_builtin_registry_is_complete() {
