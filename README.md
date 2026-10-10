@@ -7,8 +7,6 @@ An independent installer and update manager for the open-source
 DesignCraft, PdfCraft, FilmCraft, EffectCraft, SoundCraft, WordCraft, DeckCraft, GridCraft,
 CADCraft and ArtCraft). It's written in Rust and runs on Windows, macOS and Linux.
 
-Think of it as the Creative Cloud / Microsoft 365 app, but for free and open-source apps: one
-place to install them, keep them up to date, and get to your files.
 
 ![All apps](docs/screenshots/apps.png)
 
