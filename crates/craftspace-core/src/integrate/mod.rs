@@ -48,7 +48,7 @@ pub fn integrate(req: &Request) -> anyhow::Result<Integration> {
     return linux::integrate(&linux::Dirs::detect()?, req);
     #[cfg(target_os = "macos")]
     {
-        let backup = req.dir.parent().unwrap_or(req.dir).join("replaced");
+        let backup = crate::manager::versions_dir(req.dir, &req.app.id).join("replaced");
         let applications = req.applications.map(Path::to_path_buf).unwrap_or_else(macos::applications_dir);
         let active = macos::activate(req.executable, &applications, &backup)?;
         return Ok(Integration { files: vec![active.clone()], registry_keys: Vec::new(), executable: Some(active) });

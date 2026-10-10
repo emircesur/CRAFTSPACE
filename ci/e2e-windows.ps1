@@ -21,10 +21,18 @@ Check ($null -ne $psdProgids."CraftSpace.photocraft.Document") "Open with regist
 Check (-not (Test-Path (Join-Path $pc.current.dir "portable.txt"))) "portable marker removed"
 & (Join-Path $pc.current.dir "photocraft-cli.exe") --version
 & $cli verify photocraft
+# Every version uses the same folder, so defaults chosen in Windows keep working.
+$exe = $pc.current.executable
+Check ($exe.StartsWith((Join-Path $env:CRAFTSPACE_HOME "apps\PhotoCraft\"))) "program in the app's folder: $exe"
 & $cli update photocraft
 Check ((Installed photocraft).current.version -ne "0.3.0") "updated"
+Check ((Installed photocraft).current.executable -eq $exe) "the update kept the program's path"
+$openCmd = (Get-ItemProperty "HKCU:\Software\Classes\Applications\photocraft.exe\shell\open\command")."(default)"
+Check ($openCmd -like "*$exe*") "registered for default apps: $openCmd"
+& $cli verify photocraft
 & $cli rollback photocraft
 Check ((Installed photocraft).current.version -eq "0.3.0") "rolled back"
+Check ((Installed photocraft).current.executable -eq $exe) "the rollback kept the program's path"
 # Uninstall the way Settings > Apps does.
 $entry = Get-ItemProperty "$uninstallKey\CraftSpace.photocraft"
 Write-Host "UninstallString: $($entry.UninstallString)"
@@ -32,6 +40,8 @@ cmd /c "$($entry.QuietUninstallString)"
 Check ($null -eq (Installed photocraft)) "uninstalled from the registry entry"
 Check (-not (Test-Path (Join-Path $startMenu "PhotoCraft.lnk"))) "shortcut removed"
 Check (-not (Test-Path "$uninstallKey\CraftSpace.photocraft")) "registry entry removed"
+Check (-not (Test-Path "HKCU:\Software\Classes\Applications\photocraft.exe")) "default apps entry removed"
+Check (-not (Test-Path (Join-Path $env:CRAFTSPACE_HOME "apps\PhotoCraft"))) "app folder removed"
 
 # MSI (Windows Installer) path.
 & $cli config prefer_system_installer true

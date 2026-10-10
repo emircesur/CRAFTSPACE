@@ -1757,14 +1757,17 @@ impl CraftSpaceApp {
 
         if let Some((id, kind)) = self.running_prompt.clone() {
             let name = self.app_name(&id);
-            let managed = self.manager.installed_app(&id).is_some_and(|i| i.current.kind.is_managed());
+            // Windows can't replace a program that's open, and every version uses the same folder.
+            let managed =
+                !cfg!(windows) && self.manager.installed_app(&id).is_some_and(|i| i.current.kind.is_managed());
             let modal = egui::Modal::new(egui::Id::new("app-running")).show(ctx, |ui| {
                 ui.set_width(440.0);
                 ui.heading(format!("{name} is open"));
                 ui.add_space(6.0);
                 let explain = match (&kind, managed) {
                     (JobKind::Uninstall, _) => format!("Close {name} before uninstalling it, or let CraftSpace do it as soon as you close it."),
-                    (_, true) => format!("You can go ahead: the new version installs next to the open one and is used the next time you start {name}. Or wait until you close it."),
+                    (_, true) => format!("You can go ahead: the new version replaces the open one and is used the next time you start {name}. Or wait until you close it."),
+                    (_, false) if cfg!(windows) => format!("Windows can't replace {name} while it's open. CraftSpace can continue as soon as you close it."),
                     (_, false) => format!("{name}'s installer needs it to be closed. CraftSpace can continue as soon as you close it."),
                 };
                 ui.label(RichText::new(explain).color(p.weak));

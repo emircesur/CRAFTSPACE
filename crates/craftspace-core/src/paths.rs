@@ -3,7 +3,7 @@
 //! | | Windows | Linux |
 //! |---|---|---|
 //! | root | `%LOCALAPPDATA%\CraftSpace` | `$XDG_DATA_HOME/craftspace` (`~/.local/share/craftspace`) |
-//! | apps | `<root>\Apps\<app>\<version>` | `<root>/apps/<app>/<version>` |
+//! | apps | `<root>\Apps\<App>` (earlier versions in `<root>\Apps\.versions`) | `<root>/apps/<App>` |
 //! | cache | `<root>\Cache` | `$XDG_CACHE_HOME/craftspace` |
 //!
 //! `CRAFTSPACE_HOME` overrides the root (and puts everything under it), which tests and

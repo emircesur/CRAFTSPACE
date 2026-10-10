@@ -93,6 +93,25 @@ pub fn integrate(req: &Request) -> anyhow::Result<Integration> {
             k.set_value(&prog_id, &String::new())?;
             out.registry_keys.push(value_record(&path, &prog_id));
         }
+
+        // The program by its file name, which is what a default picked in "Open with" › "Choose
+        // another app" points at. Rewritten on every update, so an entry Windows made for an
+        // older path is corrected too.
+        if let Some(exe_name) = req.executable.file_name().map(|n| n.to_string_lossy().into_owned()) {
+            let app_key_path = format!(r"{CLASSES_ROOT}\Applications\{exe_name}");
+            let _ = hkcu.delete_subkey_all(&app_key_path);
+            let (app_key, _) = hkcu.create_subkey(&app_key_path)?;
+            app_key.set_value("FriendlyAppName", &req.app.name)?;
+            let (icon, _) = app_key.create_subkey("DefaultIcon")?;
+            icon.set_value("", &format!("{exe},0"))?;
+            let (cmd, _) = app_key.create_subkey(r"shell\open\command")?;
+            cmd.set_value("", &format!("{} \"%1\"", quote_arg(&exe)))?;
+            let (types, _) = app_key.create_subkey("SupportedTypes")?;
+            for ext in &req.app.extensions {
+                types.set_value(format!(".{}", ext.to_ascii_lowercase()), &String::new())?;
+            }
+            out.registry_keys.push(key_record(&app_key_path));
+        }
     }
     Ok(out)
 }

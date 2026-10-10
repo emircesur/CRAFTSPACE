@@ -1143,7 +1143,8 @@ fn install_in(
         None => say!("Installing {} {} ({})", plan.app.name, plan.release.tag, plan.kind.label()),
     }
     if from.is_some() && manager.is_running(&plan.app.id) {
-        if !plan.kind.is_managed() && !force {
+        // Windows can't replace a program that's open, and every version uses the same folder.
+        if (!plan.kind.is_managed() || cfg!(windows)) && !force {
             anyhow::bail!("{} is open; close it first (or pass --force)", plan.app.name);
         }
         eprintln!("note: {} is open; the new version is used the next time it starts", plan.app.name);

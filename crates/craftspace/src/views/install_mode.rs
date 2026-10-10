@@ -39,9 +39,9 @@ pub fn window(app: &mut CraftSpaceApp, ctx: &egui::Context) {
         ui.label(RichText::new("CraftSpace asks once. You can change it any time in Settings › Installation.").color(p.weak));
         ui.add_space(12.0);
         let portable_text = if windows {
-            "Into your user folder. No administrator rights needed, and updates install side by side, so you can go back to the previous version. Apps still get Start menu and Settings › Apps entries."
+            "Into your user folder, each app always in the same folder, so default apps stay set after updates. No administrator rights needed, and the previous version is kept so you can go back. Apps still get Start menu and Settings › Apps entries."
         } else {
-            "Into your home folder. No password needed, and updates install side by side, so you can go back to the previous version. Apps still get menu entries."
+            "Into your home folder, each app always in the same folder. No password needed, and the previous version is kept so you can go back. Apps still get menu entries."
         };
         let installer_text = if windows {
             "With each app's own Windows installer (MSI or Setup), into Program Files, like a traditional install. May ask for administrator rights. Apps without an installer are installed portable."
