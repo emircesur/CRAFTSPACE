@@ -605,14 +605,41 @@ fn set_notification_sender() {
     });
 }
 
-fn show_notification(text: &str) -> Result<(), String> {
+/// The notification CraftSpace shows (Linux). There's at most one: a new one replaces it, and
+/// opening the window withdraws it, so desktops that count unread notifications on the
+/// taskbar icon (KDE Plasma) don't keep counting ones about updates already installed.
+#[cfg(all(unix, not(target_os = "macos")))]
+static SHOWN: std::sync::Mutex<Option<notify_rust::NotificationHandle>> = std::sync::Mutex::new(None);
+
+fn show_notification_with(text: &str, transient: bool) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     set_notification_sender();
     let mut n = notify_rust::Notification::new();
     n.appname("CraftSpace").summary("CraftSpace").body(text);
     #[cfg(all(unix, not(target_os = "macos")))]
-    n.icon("craftspace");
-    n.show().map(|_| ()).map_err(|e| e.to_string())
+    {
+        n.icon("craftspace");
+        if transient {
+            // Shown, but not kept in the notification history.
+            n.hint(notify_rust::Hint::Transient(true));
+        }
+        let mut shown = SHOWN.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(previous) = shown.as_ref() {
+            n.id(previous.id());
+        }
+        let handle = n.show().map_err(|e| e.to_string())?;
+        *shown = Some(handle);
+        Ok(())
+    }
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    {
+        let _ = transient;
+        n.show().map(|_| ()).map_err(|e| e.to_string())
+    }
+}
+
+fn show_notification(text: &str) -> Result<(), String> {
+    show_notification_with(text, false)
 }
 
 /// A system notification (best effort; not every desktop has a notification service).
@@ -620,6 +647,26 @@ pub fn notify(text: String) {
     std::thread::spawn(move || {
         if let Err(err) = show_notification(&text) {
             log::info!("couldn't show a notification: {err}");
+        }
+    });
+}
+
+/// A notification that isn't kept in the desktop's notification history.
+pub fn notify_transient(text: String) {
+    std::thread::spawn(move || {
+        if let Err(err) = show_notification_with(&text, true) {
+            log::info!("couldn't show a notification: {err}");
+        }
+    });
+}
+
+/// Withdraw CraftSpace's notification (the window is open, so it has been seen).
+pub fn withdraw_notifications() {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    std::thread::spawn(|| {
+        let handle = SHOWN.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(handle) = handle {
+            handle.close();
         }
     });
 }

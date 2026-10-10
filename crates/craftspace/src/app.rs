@@ -270,6 +270,8 @@ pub struct CraftSpaceApp {
     hidden_without_tray: Option<Instant>,
     quitting: bool,
     told_about_tray: bool,
+    /// Whether the window had the focus last frame.
+    was_focused: bool,
 }
 
 impl CraftSpaceApp {
@@ -374,14 +376,16 @@ impl CraftSpaceApp {
             hidden_without_tray: None,
             quitting: false,
             told_about_tray: false,
+            was_focused: false,
             manager,
         };
         theme::load_icons(&cc.egui_ctx, &app.manager, None);
         app.offer_self_install = app.settings.offer_self_install && !selfupdate::is_installed_copy(&app.manager);
         if background {
-            if app.tray.is_some() {
+            if app.tray.is_some() && can_hide_windows() {
                 app.hidden = true;
             } else {
+                app.hidden = app.tray.is_some();
                 // Nowhere to hide: start minimized instead.
                 cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                 cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
@@ -474,10 +478,21 @@ impl CraftSpaceApp {
         self.tray.as_ref().is_some_and(Tray::shown)
     }
 
+    /// Put the window away while CraftSpace keeps running: hidden (the tray icon brings it
+    /// back), or minimized to the taskbar where windows can't be hidden (Wayland).
+    fn put_away(&mut self, ctx: &egui::Context) {
+        self.hidden = true;
+        if can_hide_windows() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        }
+    }
+
     /// A window hidden in the tray must stay reachable: if no tray icon shows up for a while
     /// (started at login on a desktop without a tray), minimize it to the taskbar instead.
     fn keep_findable(&mut self, ctx: &egui::Context) {
-        if !self.hidden || self.tray_shown() {
+        if !self.hidden || self.tray_shown() || !can_hide_windows() {
             self.hidden_without_tray = None;
             return;
         }
@@ -1837,6 +1852,16 @@ impl eframe::App for CraftSpaceApp {
         self.process_messages(ctx);
         self.handle_tray(ctx);
         self.dock.update(self.settings.dock_icon, !self.hidden);
+        // Back in front: a window minimized instead of hidden (Wayland) is open again, and the
+        // notification about what happened meanwhile has been seen.
+        let focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
+        if focused && !self.was_focused {
+            if self.hidden && !can_hide_windows() {
+                self.hidden = false;
+            }
+            worker::withdraw_notifications();
+        }
+        self.was_focused = focused;
         self.rescan_if_changed();
         if self.files.changed_at.is_some() {
             ctx.request_repaint_after(Duration::from_millis(500));
@@ -1875,14 +1900,15 @@ impl eframe::App for CraftSpaceApp {
                 self.confirm_quit = true;
             } else if self.settings.keep_running_in_tray && self.tray_shown() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                self.hidden = true;
+                self.put_away(&ctx);
                 log::info!("window closed; still running in the tray");
                 if !self.told_about_tray {
                     self.told_about_tray = true;
-                    worker::notify(
-                        "CraftSpace keeps checking for updates in the background. Quit it from the tray icon.".into(),
-                    );
+                    worker::notify_transient(if can_hide_windows() {
+                        "CraftSpace keeps checking for updates in the background. Quit it from the tray icon.".into()
+                    } else {
+                        "CraftSpace is minimized and keeps checking for updates. Quit it from the tray icon (or turn off \"Keep running in the tray\" in Settings).".into()
+                    });
                 }
             }
         }
@@ -1934,6 +1960,12 @@ impl eframe::App for CraftSpaceApp {
         }
         self.files.cancel.store(true, Ordering::Relaxed);
     }
+}
+
+/// Whether the window can be hidden (and shown again from the tray). Wayland compositors don't
+/// let a program hide or raise its own window, so there it's minimized to the taskbar instead.
+fn can_hide_windows() -> bool {
+    !(cfg!(all(unix, not(target_os = "macos"))) && std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty()))
 }
 
 /// What start-at-login should run: the installed copy when there is one.
