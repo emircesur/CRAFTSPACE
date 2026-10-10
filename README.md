@@ -6,7 +6,7 @@ An independent installer and update manager for the open-source
 [ArtCraft](https://github.com/storytold) creative apps (PhotoCraft, LightCraft, VectorCraft,
 DesignCraft, PdfCraft, FilmCraft, EffectCraft, SoundCraft, WordCraft, DeckCraft, GridCraft,
 CADCraft and ArtCraft). It's written in Rust and runs on Windows, macOS and Linux.
-
+Since they made an offical launcher, I will not maintain this project. It was a fun learning project to make a launcher and file browser! Check https://github.com/emircesur/OktoSpace for general github repo updater/installer for linux, windows and mac.
 
 ![App library](docs/screenshots/apps.png)
 
