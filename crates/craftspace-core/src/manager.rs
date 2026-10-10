@@ -412,20 +412,47 @@ impl Manager {
         self.settings().install_dir.unwrap_or_else(|| self.inner.paths.apps.clone())
     }
 
-    /// The folder holding an app's versions: a chosen location for a new install, else where the
-    /// installed version already is (so updates don't move it), else the install folder.
-    fn app_dir(&self, plan: &Plan) -> PathBuf {
+    /// The app's folder, the same for every version so its program keeps one path (Windows ties
+    /// default apps and "Open with" choices to it): `<location>/<App name>` for a new install in a
+    /// chosen location, else next to where the app already is (so updates don't move it), else
+    /// in the install folder.
+    fn app_home(&self, plan: &Plan) -> PathBuf {
+        let folder = install_folder_name(&plan.app);
         if let Some(location) = &plan.location {
-            return location.join(&plan.app.id);
+            return location.join(folder);
         }
-        // A portable copy or AppImage found on this computer: new versions go next to it.
-        if let Some(home) = self.installed_app(&plan.app.id).and_then(|a| a.current.external).and_then(|e| e.home) {
-            return home;
+        let installed = self.installed_app(&plan.app.id);
+        // A portable copy or AppImage found on this computer: the app's folder goes next to it.
+        if let Some(home) = installed.as_ref().and_then(|a| a.current.external.as_ref()).and_then(|e| e.home.clone()) {
+            return home.join(folder);
         }
-        self.installed_app(&plan.app.id)
+        if let Some(dir) = installed.and_then(|a| a.current.dir.filter(|_| a.current.kind.is_managed())) {
+            if is_home_of(&dir, &plan.app) {
+                return dir;
+            }
+            // Installed before versions shared a folder: `<x>/<id>/<version>`.
+            if let Some(x) = dir.parent().and_then(Path::parent) {
+                return x.join(folder);
+            }
+        }
+        self.apps_root().join(folder)
+    }
+
+    /// What is in the way of `home`: the folder there now, or the `<x>/<id>` folder of an install
+    /// from before versions shared a folder (the same folder as `home` where names ignore case).
+    fn occupant(&self, id: &str, home: &Path) -> Option<PathBuf> {
+        let old = self
+            .installed_app(id)
             .and_then(|a| a.current.dir.filter(|_| a.current.kind.is_managed()))
             .and_then(|d| d.parent().map(Path::to_path_buf))
-            .unwrap_or_else(|| self.apps_root().join(&plan.app.id))
+            .filter(|old| {
+                old.parent() == home.parent()
+                    && old
+                        .file_name()
+                        .zip(home.file_name())
+                        .is_some_and(|(a, b)| a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy()))
+            });
+        old.filter(|o| o.is_dir()).or_else(|| home.exists().then(|| home.to_path_buf()))
     }
 
     // ---- discovery -------------------------------------------------------------------------
@@ -941,7 +968,11 @@ impl Manager {
                 plan.asset.name
             );
         }
-        let previous = self.installed_app(&plan.app.id);
+        let mut previous = self.installed_app(&plan.app.id);
+        // Every version uses the same folder, and Windows can't replace a program that's open.
+        if cfg!(windows) && plan.kind.is_managed() && previous.is_some() && self.is_running(&plan.app.id) {
+            anyhow::bail!("{} is open; close it first", plan.app.name);
+        }
 
         // Download: a delta update when possible, else the package (reusing a verified earlier
         // download, resuming a partial one).
@@ -1009,11 +1040,15 @@ impl Manager {
         }
         progress.check_cancelled()?;
 
-        let mut new_version = if plan.kind.is_managed() {
+        let (mut new_version, moved) = if plan.kind.is_managed() {
             self.install_managed(plan, &version, &archive_path, &sha256, progress)?
         } else {
-            self.install_system(plan, &version, &archive_path, &sha256, progress)?
+            (self.install_system(plan, &version, &archive_path, &sha256, progress)?, None)
         };
+        // The version that was in the app's folder is in `.versions` now.
+        if let (Some(prev), Some((from, to))) = (previous.as_mut(), &moved) {
+            move_paths(prev, from, to);
+        }
         new_version.delta_downloaded = delta_downloaded;
         // An app found on this computer stays where it was found for later updates too.
         if let Some(prev) = previous.as_ref().filter(|p| p.current.kind == plan.kind) {
@@ -1066,7 +1101,10 @@ impl Manager {
         let id = plan.app.id.clone();
         let keep_previous = settings.keep_previous_version;
         let record = self.with_db(|db| {
-            let old = db.apps.remove(&id);
+            let mut old = db.apps.remove(&id);
+            if let (Some(old), Some((from, to))) = (old.as_mut(), &moved) {
+                move_paths(old, from, to);
+            }
             let mut to_remove = Vec::new();
             let mut kept = None;
             if let Some(mut old) = old {
@@ -1093,6 +1131,7 @@ impl Manager {
             for v in to_remove.into_iter().filter(|v| v.external.is_none()) {
                 if let Some(dir) = v.dir.filter(|d| Some(d) != new_version.dir.as_ref()) {
                     db.remove_dir_or_defer(&dir);
+                    remove_empty_parents(&dir, &id);
                 }
             }
             let record = InstalledApp {
@@ -1169,6 +1208,8 @@ impl Manager {
         }
     }
 
+    /// Unpack into the app's folder. Also returns where the folder that was there moved (from,
+    /// to), when something was.
     fn install_managed(
         &self,
         plan: &Plan,
@@ -1176,16 +1217,17 @@ impl Manager {
         archive_path: &Path,
         sha256: &str,
         progress: &Progress,
-    ) -> anyhow::Result<InstalledVersion> {
+    ) -> anyhow::Result<(InstalledVersion, Option<(PathBuf, PathBuf)>)> {
         progress.stage(Stage::Installing);
-        let app_dir = self.app_dir(plan);
-        std::fs::create_dir_all(&app_dir)?;
-        // Next to a copy found on this computer, the folder says which app it is.
-        let beside_external = self
-            .installed_app(&plan.app.id)
-            .is_some_and(|a| a.current.external.as_ref().is_some_and(|e| e.home.is_some()));
-        let name = if beside_external { format!("{}-{version}", plan.app.id) } else { version.to_string() };
-        let dir = free_dir(&app_dir, &name);
+        let home = self.app_home(plan);
+        // Unpacked next to the app's folder (same drive), then swapped in with a rename, so an
+        // update never leaves a half-written app behind.
+        let versions = versions_dir(&home, &plan.app.id);
+        std::fs::create_dir_all(&versions)?;
+        if let Some(all) = versions.parent() {
+            hide(all);
+        }
+        let dir = free_dir(&versions, &format!("new-{version}"));
 
         let result = (|| -> anyhow::Result<PathBuf> {
             match plan.kind {
@@ -1226,29 +1268,47 @@ impl Manager {
             Ok(e) => e,
             Err(err) => {
                 let _ = std::fs::remove_dir_all(&dir);
+                remove_empty_parents(&dir, &plan.app.id);
                 return Err(err);
             }
         };
+        // The version there now moves into `.versions` (kept for rollback or removed later).
+        let occupant = self.occupant(&plan.app.id, &home);
+        let aside = occupant.as_ref().map(|o| {
+            let current = self.installed_app(&plan.app.id).map(|a| a.current).filter(|c| c.dir.as_ref() == Some(o));
+            free_dir(&versions, &current.map(|c| c.version.to_string()).unwrap_or_else(|| "earlier".into()))
+        });
+        if let Err(err) = swap_into(&home, &dir, occupant.as_deref().zip(aside.as_deref())) {
+            let _ = std::fs::remove_dir_all(&dir);
+            remove_empty_parents(&dir, &plan.app.id);
+            return Err(err);
+        }
+        let executable = moved_path(&executable, &dir, &home);
+        let dir = home;
         // For repairs: what every file should look like.
         let manifest_root = if plan.kind == AssetKind::Dmg { executable.clone() } else { dir.clone() };
-        if let Err(err) = self.write_manifest(&plan.app.id, &dir, &manifest_root) {
+        if let Err(err) = self.write_manifest(&plan.app.id, version, &manifest_root) {
             log::warn!("couldn't record {}'s files for repairs: {err:#}", plan.app.name);
         }
-        Ok(InstalledVersion {
-            version: version.clone(),
-            tag: plan.release.tag.clone(),
-            asset: plan.asset.name.clone(),
-            kind: plan.kind,
-            sha256: Some(sha256.to_string()),
-            size_bytes: Some(dir_size(&dir)),
-            dir: Some(dir),
-            executable: Some(executable),
-            package: None,
-            installed_at: github::now_secs(),
-            delta_downloaded: None,
-            system_package: None,
-            external: None,
-        })
+        let moved = occupant.zip(aside);
+        Ok((
+            InstalledVersion {
+                version: version.clone(),
+                tag: plan.release.tag.clone(),
+                asset: plan.asset.name.clone(),
+                kind: plan.kind,
+                sha256: Some(sha256.to_string()),
+                size_bytes: Some(dir_size(&dir)),
+                dir: Some(dir),
+                executable: Some(executable),
+                package: None,
+                installed_at: github::now_secs(),
+                delta_downloaded: None,
+                system_package: None,
+                external: None,
+            },
+            moved,
+        ))
     }
 
     /// Hand an MSI or setup program to Windows and keep the package for uninstalling.
@@ -1331,14 +1391,30 @@ impl Manager {
         let _busy = self.mark_busy(id)?;
         let app = self.require_app(id)?;
         let installed = self.installed_app(id).ok_or_else(|| anyhow::anyhow!("{} is not installed", app.name))?;
-        let previous =
+        let mut previous =
             installed.previous.clone().ok_or_else(|| anyhow::anyhow!("no earlier version of {} is kept", app.name))?;
         let (Some(dir), Some(exe)) = (previous.dir.clone(), previous.executable.clone()) else {
             anyhow::bail!("the earlier version of {} can't be restored", app.name)
         };
         anyhow::ensure!(exe.exists(), "the earlier version's files are gone ({})", dir.display());
-        let deactivated =
+        let mut deactivated =
             integrate::deactivate(installed.current.dir.as_deref(), installed.current.executable.as_deref());
+        // The earlier version moves back into the app's folder, the current one into `.versions`.
+        // (Versions from before they shared a folder stay where they are.)
+        let mut swapped = None;
+        if let Some(home) = installed.current.dir.clone().filter(|h| is_home_of(h, &app)) {
+            let versions = versions_dir(&home, id);
+            if dir.starts_with(&versions) {
+                let aside = free_dir(&versions, &installed.current.version.to_string());
+                swap_into(&home, &dir, Some((&home, &aside)))?;
+                remove_empty_parents(&dir, id);
+                previous.executable = Some(moved_path(&exe, &dir, &home));
+                previous.dir = Some(home.clone());
+                deactivated = deactivated.map(|d| moved_path(&d, &home, &aside));
+                swapped = Some((home, aside));
+            }
+        }
+        let (dir, exe) = (previous.dir.clone().unwrap_or(dir), previous.executable.clone().unwrap_or(exe));
         let req = integrate::Request {
             app: &app,
             version: &previous.version,
@@ -1360,6 +1436,9 @@ impl Manager {
                 restored.executable = Some(exe);
             }
             let mut current = std::mem::replace(&mut entry.current, restored);
+            if let Some((home, aside)) = &swapped {
+                move_version(&mut current, home, aside);
+            }
             if let Some(exe) = deactivated {
                 current.executable = Some(exe);
             }
@@ -1375,7 +1454,6 @@ impl Manager {
         let _busy = self.mark_busy(id)?;
         let installed = self.installed_app(id).ok_or_else(|| anyhow::anyhow!("{id} is not installed"))?;
         self.guard_managed("uninstalling")?;
-        let app_dir = installed.current.dir.as_ref().and_then(|d| d.parent()).map(Path::to_path_buf);
         if let Some(external) = &installed.current.external {
             self.uninstall_external(&installed, external)?;
         }
@@ -1388,16 +1466,15 @@ impl Manager {
                 for v in std::iter::once(app.current).chain(app.previous) {
                     if let Some(dir) = v.dir {
                         db.remove_dir_or_defer(&dir);
+                        remove_empty_parents(&dir, id);
                     }
                     if let Some(pkg) = v.package {
                         let _ = std::fs::remove_file(pkg);
                     }
                 }
             }
-            // The app's folder, only if empty.
-            for dir in app_dir.iter().cloned().chain([self.apps_root().join(id)]) {
-                let _ = std::fs::remove_dir(&dir);
-            }
+            // The app's folder in the install folder, only if empty.
+            let _ = std::fs::remove_dir(self.apps_root().join(id));
         })?;
         let _ = std::fs::remove_dir_all(self.inner.paths.root.join("manifests").join(id));
         Ok(())
@@ -1545,12 +1622,18 @@ impl Manager {
 
     // ---- repair ----------------------------------------------------------------------------
 
-    fn manifest_path(&self, id: &str, version_dir: &Path) -> PathBuf {
-        let name = version_dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        self.inner.paths.root.join("manifests").join(id).join(format!("{name}.json"))
+    /// Where the record of a version's files is. (Before versions shared a folder these were
+    /// named after the version's folder, which was usually the version.)
+    fn manifest_path(&self, id: &str, version: &Version, dir: Option<&Path>) -> PathBuf {
+        let folder = self.inner.paths.root.join("manifests").join(id);
+        let path = folder.join(format!("{version}.json"));
+        match dir.and_then(Path::file_name) {
+            Some(name) if !path.exists() => folder.join(format!("{}.json", name.to_string_lossy())),
+            _ => path,
+        }
     }
 
-    fn write_manifest(&self, id: &str, version_dir: &Path, root: &Path) -> anyhow::Result<()> {
+    fn write_manifest(&self, id: &str, version: &Version, root: &Path) -> anyhow::Result<()> {
         let mut files = BTreeMap::new();
         for entry in walkdir::WalkDir::new(root).into_iter().filter_map(Result::ok) {
             if entry.file_type().is_file() {
@@ -1559,7 +1642,7 @@ impl Manager {
             }
         }
         let manifest = Manifest { root: root.to_path_buf(), files };
-        write_atomic(&self.manifest_path(id, version_dir), &serde_json::to_vec(&manifest)?)?;
+        write_atomic(&self.manifest_path(id, version, None), &serde_json::to_vec(&manifest)?)?;
         Ok(())
     }
 
@@ -1579,7 +1662,7 @@ impl Manager {
             return Ok(VerifyReport { checked: exe.iter().count(), missing, changed: Vec::new() });
         };
         let manifest: Manifest = serde_json::from_slice(
-            &std::fs::read(self.manifest_path(id, dir))
+            &std::fs::read(self.manifest_path(id, &current.version, Some(dir)))
                 .context("no record of the installed files; reinstall to repair")?,
         )?;
         // macOS bundles move into ~/Applications after the manifest is written.
@@ -2699,6 +2782,93 @@ fn remote_policy_file(paths: &Paths) -> PathBuf {
     paths.cache.join("policy-remote.json")
 }
 
+/// Where earlier versions (and new ones being unpacked) wait: `.versions/<app id>` next to the
+/// app's folder, on the same drive so switching versions is a rename.
+pub(crate) fn versions_dir(home: &Path, id: &str) -> PathBuf {
+    home.parent().unwrap_or(home).join(VERSIONS_DIR).join(id)
+}
+
+const VERSIONS_DIR: &str = ".versions";
+
+/// The name of an app's folder: the app's name, made safe for file names ("PdfCraft").
+pub fn install_folder_name(app: &AppEntry) -> String {
+    let name: String =
+        app.name.chars().map(|c| if c.is_control() || r#"<>:"/\|?*"#.contains(c) { '-' } else { c }).collect();
+    let name = name.trim().trim_end_matches(['.', ' ']);
+    if name.is_empty() {
+        app.id.clone()
+    } else {
+        name.to_string()
+    }
+}
+
+/// Whether `dir` is the app's folder (rather than a version folder from before versions shared
+/// one).
+fn is_home_of(dir: &Path, app: &AppEntry) -> bool {
+    dir.file_name().is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(&install_folder_name(app)))
+}
+
+/// Put `incoming` in `home`'s place, first moving `occupant` (what is there now) to its `aside`
+/// path. If the second step fails the occupant moves back.
+fn swap_into(home: &Path, incoming: &Path, occupant: Option<(&Path, &Path)>) -> anyhow::Result<()> {
+    if let Some((from, aside)) = occupant {
+        std::fs::rename(from, aside)
+            .with_context(|| format!("couldn't move {} aside; is the app open?", from.display()))?;
+    }
+    if let Err(err) = std::fs::rename(incoming, home) {
+        if let Some((from, aside)) = occupant {
+            let _ = std::fs::rename(aside, from);
+        }
+        return Err(anyhow::Error::from(err).context(format!("couldn't move the new version into {}", home.display())));
+    }
+    Ok(())
+}
+
+/// `path`, after the folder `from` (or one holding it) moved to `to`.
+fn moved_path(path: &Path, from: &Path, to: &Path) -> PathBuf {
+    match path.strip_prefix(from) {
+        Ok(rest) if rest.as_os_str().is_empty() => to.to_path_buf(),
+        Ok(rest) => to.join(rest),
+        Err(_) => path.to_path_buf(),
+    }
+}
+
+fn move_version(v: &mut InstalledVersion, from: &Path, to: &Path) {
+    v.dir = v.dir.as_deref().map(|d| moved_path(d, from, to));
+    v.executable = v.executable.as_deref().map(|e| moved_path(e, from, to));
+}
+
+fn move_paths(app: &mut InstalledApp, from: &Path, to: &Path) {
+    move_version(&mut app.current, from, to);
+    if let Some(p) = app.previous.as_mut() {
+        move_version(p, from, to);
+    }
+}
+
+/// After removing a version folder, remove the folders it leaves empty: those in `.versions`,
+/// and `<x>/<id>` from before versions shared a folder.
+fn remove_empty_parents(dir: &Path, id: &str) {
+    for parent in dir.ancestors().skip(1) {
+        let in_versions = parent.ancestors().any(|a| a.file_name().is_some_and(|n| n == VERSIONS_DIR));
+        let named_id = parent.file_name().is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(id));
+        if !(in_versions || named_id) || std::fs::remove_dir(parent).is_err() {
+            break;
+        }
+    }
+}
+
+/// Hide a folder in Explorer (dot folders are hidden elsewhere already).
+fn hide(dir: &Path) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let _ = std::process::Command::new("attrib").arg("+h").arg(dir).creation_flags(CREATE_NO_WINDOW).status();
+    }
+    #[cfg(not(windows))]
+    let _ = dir;
+}
+
 fn free_dir(parent: &Path, name: &str) -> PathBuf {
     let first = parent.join(name);
     if !first.exists() {
@@ -3045,7 +3215,7 @@ mod tests {
 
         let updated = no_progress(|p| m.install(&local_plan(&m, "0.5.0"), p)).unwrap();
         let dir = updated.current.dir.clone().unwrap();
-        assert_eq!(dir, downloads.join("photocraft-0.5.0"), "next to the copy that was found");
+        assert_eq!(dir, downloads.join("PhotoCraft"), "next to the copy that was found");
         assert!(found.join(exe.file_name().unwrap()).is_file(), "the found copy is kept");
         assert_eq!(updated.previous.as_ref().and_then(|p| p.dir.clone()), Some(found.clone()));
         assert!(!m.apps_root().join("photocraft").exists());
@@ -3060,15 +3230,21 @@ mod tests {
         let mut plan = local_plan(&m, "0.3.0");
         plan.location = Some(chosen.clone());
         let installed = no_progress(|p| m.install(&plan, p)).unwrap();
-        assert!(installed.current.dir.as_ref().unwrap().starts_with(chosen.join("photocraft")));
+        let exe = installed.current.executable.clone().unwrap();
+        assert_eq!(installed.current.dir.as_ref(), Some(&chosen.join("PhotoCraft")));
+        assert!(exe.starts_with(chosen.join("PhotoCraft")));
 
-        // The update goes next to it, not into the default folder.
+        // The update goes into the same folder (same program path), not into the default folder.
         let updated = no_progress(|p| m.install(&local_plan(&m, "0.5.0"), p)).unwrap();
-        assert!(updated.current.dir.as_ref().unwrap().starts_with(chosen.join("photocraft")));
-        assert!(!m.apps_root().join("photocraft").exists());
+        assert_eq!(updated.current.executable.as_ref(), Some(&exe));
+        assert!(exe.is_file());
+        assert!(updated.previous.as_ref().unwrap().dir.as_ref().unwrap().starts_with(chosen.join(".versions")));
+        assert!(!m.apps_root().join("PhotoCraft").exists());
 
         m.uninstall("photocraft").unwrap();
-        assert!(!chosen.join("photocraft").exists());
+        assert!(!chosen.join("PhotoCraft").exists());
+        assert!(!chosen.join(".versions").exists());
+        assert!(chosen.exists(), "the chosen folder itself stays");
     }
 
     #[test]
@@ -3077,45 +3253,127 @@ mod tests {
         let m = manager(tmp.path());
 
         let first = no_progress(|p| m.install(&local_plan(&m, "0.4.0"), p)).unwrap();
-        let dir1 = first.current.dir.clone().unwrap();
-        assert!(first.current.executable.as_ref().unwrap().is_file());
-        assert!(!dir1.join("portable.txt").exists());
+        let home = first.current.dir.clone().unwrap();
+        let exe = first.current.executable.clone().unwrap();
+        assert_eq!(home, m.apps_root().join("PhotoCraft"));
+        assert!(exe.is_file());
+        assert!(!home.join("portable.txt").exists());
         assert!(first.previous.is_none());
+        assert!(m.verify("photocraft").unwrap().is_ok());
 
+        // Every version uses the same folder; the previous one waits in `.versions`.
         let second = no_progress(|p| m.install(&local_plan(&m, "0.5.0"), p)).unwrap();
         assert_eq!(second.current.version, Version::new(0, 5, 0));
-        assert_eq!(second.previous.as_ref().unwrap().version, Version::new(0, 4, 0));
-        assert!(dir1.exists(), "previous version kept for rollback");
+        assert_eq!((second.current.dir.as_ref(), second.current.executable.as_ref()), (Some(&home), Some(&exe)));
+        let kept = second.previous.clone().unwrap();
+        assert_eq!(kept.version, Version::new(0, 4, 0));
+        assert_eq!(kept.dir, Some(m.apps_root().join(".versions/photocraft/0.4.0")));
+        assert!(kept.executable.as_ref().unwrap().is_file(), "previous version kept for rollback");
+        assert!(m.verify("photocraft").unwrap().is_ok());
 
         // Persisted.
         let reopened = Manager::open_with_policy(m.paths().clone(), Policy::default()).unwrap();
         assert_eq!(reopened.installed_app("photocraft").unwrap().current.version, Version::new(0, 5, 0));
 
+        // Rolling back swaps the folders, so the program keeps its path.
         let rolled = m.rollback("photocraft").unwrap();
         assert_eq!(rolled.current.version, Version::new(0, 4, 0));
+        assert_eq!((rolled.current.dir.as_ref(), rolled.current.executable.as_ref()), (Some(&home), Some(&exe)));
         assert_eq!(rolled.previous.as_ref().unwrap().version, Version::new(0, 5, 0));
+        assert!(rolled.previous.as_ref().unwrap().executable.as_ref().unwrap().is_file());
+        assert!(m.verify("photocraft").unwrap().is_ok());
+        assert!(!kept.dir.unwrap().exists());
 
         // A third version drops the oldest kept one.
-        let dir2 = second.current.dir.clone().unwrap();
+        let dir2 = rolled.previous.as_ref().unwrap().dir.clone().unwrap();
         let third = no_progress(|p| m.install(&local_plan(&m, "0.6.0"), p)).unwrap();
         assert_eq!(third.previous.as_ref().unwrap().version, Version::new(0, 4, 0));
+        assert_eq!(third.current.executable.as_ref(), Some(&exe));
         assert!(!dir2.exists());
 
         m.uninstall("photocraft").unwrap();
         assert!(m.installed_app("photocraft").is_none());
-        assert!(!third.current.dir.unwrap().exists());
-        assert!(!dir1.exists());
+        assert!(!home.exists());
+        assert!(!m.apps_root().join(".versions").exists());
     }
 
     #[test]
-    fn reinstalling_same_version_uses_fresh_folder_and_bad_checksums_fail() {
+    fn an_install_from_before_versions_shared_a_folder_moves_into_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let m = manager(tmp.path());
+        let old = m.apps_root().join("photocraft");
+        let kind = local_plan(&m, "0.3.0").kind;
+        let version = |v: &str| {
+            let dir = old.join(v);
+            let exe = dir.join(if cfg!(windows) { "photocraft.exe" } else { "photocraft" });
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(&exe, v).unwrap();
+            InstalledVersion {
+                version: Version::parse(v).unwrap(),
+                tag: format!("v{v}"),
+                asset: String::new(),
+                kind,
+                sha256: None,
+                dir: Some(dir),
+                executable: Some(exe),
+                package: None,
+                installed_at: 0,
+                size_bytes: None,
+                delta_downloaded: None,
+                system_package: None,
+                external: None,
+            }
+        };
+        let app = InstalledApp {
+            id: "photocraft".into(),
+            current: version("0.3.0"),
+            previous: Some(version("0.2.0")),
+            integration: Vec::new(),
+            registry_keys: Vec::new(),
+            last_launched: None,
+        };
+        m.with_db(|db| db.apps.insert("photocraft".into(), app)).unwrap();
+
+        let updated = no_progress(|p| m.install(&local_plan(&m, "0.5.0"), p)).unwrap();
+        assert_eq!(updated.current.dir, Some(m.apps_root().join("PhotoCraft")));
+        let kept = updated.previous.unwrap();
+        assert_eq!(kept.version, Version::new(0, 3, 0));
+        assert_eq!(std::fs::read_to_string(kept.executable.unwrap()).unwrap(), "0.3.0", "kept for rollback");
+        assert!(kept.dir.unwrap().starts_with(m.apps_root().join(".versions/photocraft")));
+        assert!(!old.join("0.2.0").exists() && !old.join("0.3.0").exists());
+
+        let rolled = m.rollback("photocraft").unwrap();
+        assert_eq!(rolled.current.version, Version::new(0, 3, 0));
+        assert!(rolled.current.executable.unwrap().is_file());
+        m.uninstall("photocraft").unwrap();
+        let left: Vec<_> = walkdir::WalkDir::new(m.apps_root())
+            .min_depth(1)
+            .into_iter()
+            .map(|e| e.unwrap().path().to_path_buf())
+            .collect();
+        assert!(left.is_empty(), "nothing left behind: {left:?}");
+    }
+
+    #[test]
+    fn folder_names_are_safe() {
+        let mut app = Catalog::builtin().apps.into_iter().find(|a| a.id == "pdfcraft").unwrap();
+        assert_eq!(install_folder_name(&app), "PdfCraft");
+        app.name = "Photo: Craft?. ".into();
+        assert_eq!(install_folder_name(&app), "Photo- Craft-");
+        app.name = " ..".into();
+        assert_eq!(install_folder_name(&app), "pdfcraft");
+    }
+
+    #[test]
+    fn reinstalling_same_version_replaces_it_and_bad_checksums_fail() {
         let tmp = tempfile::tempdir().unwrap();
         let m = manager(tmp.path());
         let a = no_progress(|p| m.install(&local_plan(&m, "0.5.0"), p)).unwrap();
         let b = no_progress(|p| m.install(&local_plan(&m, "0.5.0"), p)).unwrap();
-        assert_ne!(a.current.dir, b.current.dir);
-        assert!(!a.current.dir.unwrap().exists(), "same version isn't kept as a rollback target");
-        assert!(b.previous.is_none());
+        assert_eq!(a.current.dir, b.current.dir);
+        assert!(b.current.executable.unwrap().is_file());
+        assert!(b.previous.is_none(), "same version isn't kept as a rollback target");
+        assert!(!m.apps_root().join(".versions").exists());
 
         let mut plan = local_plan(&m, "0.7.0");
         plan.asset.sha256 = Some("0".repeat(64));

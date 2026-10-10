@@ -17,11 +17,18 @@ test -L "$XDG_BIN_HOME/photocraft"
 ls "$XDG_DATA_HOME/applications/" | grep -q photocraft
 grep -q "Exec=$CRAFTSPACE_HOME" "$XDG_DATA_HOME"/applications/*photocraft*.desktop
 "$cli" verify photocraft
+# Every version uses the same folder, so the program keeps its path.
+exe="$(installed photocraft executable)"
+case "$exe" in "$CRAFTSPACE_HOME/apps/PhotoCraft/"*) ;; *) echo "not in the app's folder: $exe"; exit 1 ;; esac
 "$cli" update photocraft
 test "$(installed photocraft version)" != "0.3.0"
+test "$(installed photocraft executable)" = "$exe"
 "$XDG_BIN_HOME/photocraft-cli" --version
+"$cli" verify photocraft
 "$cli" rollback photocraft
 test "$(installed photocraft version)" = "0.3.0"
+test "$(installed photocraft executable)" = "$exe"
+"$XDG_BIN_HOME/photocraft-cli" --version
 "$cli" channel photocraft pin
 "$cli" check || test $? -eq 10
 "$cli" channel photocraft default

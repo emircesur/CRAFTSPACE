@@ -46,8 +46,8 @@ CADCraft and ArtCraft). It's written in Rust and runs on Windows, macOS and Linu
 **Updates**
 - Checks GitHub on start and every few hours, from the tray / menu bar even when the window is
   closed, and shows a notification when updates are found. It can install them automatically.
-- If an app is open, CraftSpace asks whether to update now (the new version is used next time:
-  versions install side by side) or **when it closes**, and waits for it.
+- If an app is open, CraftSpace updates it **when it closes**, and waits for it (on Linux and
+  macOS it can also update right away; the new version is used next time).
 - Keeps the previous version for rollback.
 - **Delta updates** for AppImages: the old AppImage plus the release's `.zsync` file rebuild the
   new one, downloading only the blocks that changed. When too little of the old file can be
@@ -149,13 +149,16 @@ ArtCraft releases follow one naming scheme, `<app>-<version>-<platform>[-portabl
 | macOS (Intel and Apple silicon) | `…-macos-universal.dmg` | |
 | Linux x86_64 / aarch64 | `…-linux-x86_64.tar.gz` | `.AppImage` (with delta updates), `.rpm`, `.deb` |
 
-Portable zips, tarballs, AppImages and disk images are unpacked side by side, one folder per
-version, so an update never leaves a half-written app behind and the previous version can be
-kept for rollback:
+Portable zips, tarballs, AppImages and disk images go into one folder per app that stays the
+same for every version (`…\Apps\PdfCraft\pdfcraft.exe`, or `<your folder>\PdfCraft\pdfcraft.exe`
+when you pick where to install), so default apps and "Open with" choices keep working after
+updates. A new version is unpacked next to it first and then swapped in, so an update never
+leaves a half-written app behind; the previous version moves to a hidden `.versions` folder
+beside it, kept for rollback:
 
 | | Windows | macOS | Linux |
 |---|---|---|---|
-| Apps | `%LOCALAPPDATA%\CraftSpace\Apps\<app>\<version>` | current version in `~/Applications`, older ones in `~/Library/Application Support/CraftSpace` | `~/.local/share/craftspace/apps/<app>/<version>` |
+| Apps | `%LOCALAPPDATA%\CraftSpace\Apps\<App>` | current version in `~/Applications`, older ones in `~/Library/Application Support/CraftSpace` | `~/.local/share/craftspace/apps/<App>` |
 | Menu entry | Start menu › ArtCraft › *App* | Launchpad / Spotlight | `.desktop` file with the app's icons and MIME types |
 | Command line | | | `~/.local/bin/<app>` and `<app>-cli` |
 | Uninstall entry | Settings › Apps | | |
