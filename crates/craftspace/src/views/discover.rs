@@ -265,17 +265,7 @@ fn apps_to_try(app: &mut CraftSpaceApp, ui: &mut Ui) {
                         theme::badge(ui, &s.app, 36.0);
                         ui.vertical(|ui| {
                             ui.label(RichText::new(&s.app.name).strong());
-                            ui.label(
-                                RichText::new(
-                                    s.app
-                                        .like
-                                        .as_ref()
-                                        .map(|l| format!("Like {l}"))
-                                        .unwrap_or_else(|| s.app.tagline.clone()),
-                                )
-                                .size(12.0)
-                                .color(p.weak),
-                            );
+                            ui.label(RichText::new(&s.app.tagline).size(12.0).color(p.weak));
                         });
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if s.installable.is_some()

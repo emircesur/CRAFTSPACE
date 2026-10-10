@@ -146,6 +146,15 @@ impl Addon {
         self.trust == Trust::Checked
     }
 
+    /// Whether this listing is a newer version than the one installed.
+    pub fn is_update_for(&self, installed: &Installed) -> bool {
+        let (Some(new), Some(old)) = (self.version.as_deref(), installed.version.as_deref()) else { return false };
+        match (crate::version::parse_tag(new), crate::version::parse_tag(old)) {
+            (Some(new), Some(old)) => new > old,
+            _ => new != old,
+        }
+    }
+
     /// The newer CraftSpace this add-on needs, when this one is too old for it.
     pub fn needs_newer(&self) -> Option<semver::Version> {
         let needed = crate::version::parse_tag(self.requires.as_deref()?)?;

@@ -293,9 +293,6 @@ fn card(app: &mut CraftSpaceApp, ui: &mut Ui, s: &AppState, w: f32) {
                 if name.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                     app.actions.push(Action::ShowApp(id.clone()));
                 }
-                if let Some(like) = &s.app.like {
-                    ui.label(RichText::new(format!("Like {like}")).size(12.0).color(p.weak));
-                }
             });
             ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                 if s.update_available {
@@ -668,9 +665,6 @@ fn detail(app: &mut CraftSpaceApp, ui: &mut Ui, id: &str) {
             ui.horizontal(|ui| {
                 let catalog = app.manager.catalog();
                 theme::chip(ui, &catalog.category_name(&s.app.category), p.weak);
-                if let Some(like) = &s.app.like {
-                    theme::chip(ui, &format!("Like {like}"), p.weak);
-                }
                 theme::chip(ui, "Open source", p.good);
                 if s.app.custom {
                     ui.scope(|ui| theme::chip(ui, "From GitHub", p.accent))

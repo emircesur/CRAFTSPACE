@@ -289,6 +289,7 @@ fn addon_card(app: &mut CraftSpaceApp, ui: &mut Ui, a: &craftspace_core::addons:
     let key = format!("addons:{}", a.id);
     let busy = app.jobs.contains_key(&key);
     let is_installed = installed.contains_key(&a.id);
+    let update = installed.get(&a.id).filter(|i| a.is_update_for(i) && a.needs_newer().is_none());
     let file = a.file_for(platform);
     theme::card_frame(&p, false).show(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -331,6 +332,12 @@ fn addon_card(app: &mut CraftSpaceApp, ui: &mut Ui, a: &craftspace_core::addons:
                 } else if is_installed {
                     if ui.button("Remove").clicked() {
                         app.actions.push(Action::RemoveAddon(a.id.clone()));
+                    }
+                    if update.is_some()
+                        && theme::primary(ui, &p, &format!("Update to {}", a.version.as_deref().unwrap_or("new")))
+                            .clicked()
+                    {
+                        app.actions.push(Action::InstallAddon(a.id.clone()));
                     }
                 } else if file.is_none() {
                     ui.label(RichText::new(format!("Not for {}", platform.display())).size(12.0).color(p.weak));

@@ -2207,6 +2207,15 @@ impl Manager {
         errors
     }
 
+    /// Installed add-ons with a newer version listed (that this CraftSpace can install).
+    pub fn addon_updates(&self) -> Vec<addons::Addon> {
+        let installed = self.installed_addons();
+        self.available_addons()
+            .into_iter()
+            .filter(|a| a.needs_newer().is_none() && installed.get(&a.id).is_some_and(|i| a.is_update_for(i)))
+            .collect()
+    }
+
     pub fn installed_addons(&self) -> BTreeMap<String, addons::Installed> {
         self.installed().addons
     }
@@ -2297,6 +2306,14 @@ impl Manager {
             "{} has nothing for this computer",
             addon.name
         );
+        // An update: take out what the old version had that this one doesn't.
+        if let Some(old) = self.installed_addons().remove(&addon.id) {
+            for path in old.paths.iter().filter(|p| !report.written.contains(p)) {
+                remove_any(path);
+            }
+            let gone: Vec<_> = old.actions.into_iter().filter(|a| !report.actions.contains(a)).collect();
+            let _ = self.unmerge_actions(&gone);
+        }
         let installed = addons::Installed {
             version: addon.version.clone(),
             source: addon.source.clone(),
@@ -2805,7 +2822,7 @@ mod tests {
         make_zip(&zip, &[("doom-photocraft.wasm", b"\0asm"), ("doom-actions.json", actions)]);
         let entry = |id: &str, requires: &str| {
             serde_json::json!({
-                "id": id, "name": id, "kind": "plugin", "trust": "checked", "author": "CraftSpace",
+                "id": id, "name": id, "kind": "plugin", "trust": "checked", "author": "CraftSpace", "version": "1.0.0",
                 "apps": ["photocraft"], "requires": requires,
                 "files": [{"url": format!("{}/doom.zip", crate::download::tests::serve(std::fs::read(&zip).unwrap()).trim_end_matches('/')),
                            "sha256": crate::download::sha256_file(&zip).unwrap()}],
@@ -2830,6 +2847,15 @@ mod tests {
         assert!(prefs["shortcuts"].get("actions.play:Doom: Fire").is_none(), "a key already used was taken");
         let plugins = prefs["plugIns"]["additionalPluginsFolder"].as_str().map(PathBuf::from);
         assert!(plugins.is_some_and(|d| d.join("doom-photocraft.wasm").is_file()), "{prefs}");
+
+        // A newer version listed: offered as an update, and installing it brings it up to date.
+        assert!(m.addon_updates().is_empty());
+        let newer = registry.to_string().replace("\"1.0.0\"", "\"1.0.1\"");
+        std::fs::write(m.addons_cache().join("registry.json"), newer).unwrap();
+        assert_eq!(m.addon_updates().iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), ["doom"]);
+        no_progress(|p| m.install_addon("doom", false, p)).unwrap();
+        assert!(m.addon_updates().is_empty());
+        assert_eq!(read(&config.join("Presets/actions.json"))["actions"].as_array().unwrap().len(), 17);
 
         m.uninstall_addon("doom").unwrap();
         assert!(read(&config.join("Presets/actions.json"))["actions"].as_array().unwrap().is_empty());

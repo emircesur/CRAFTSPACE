@@ -254,6 +254,12 @@ enum AddonAction {
         #[arg(long, short)]
         yes: bool,
     },
+    /// Update installed add-ons that have a newer version (all of them, or the ones named).
+    Update {
+        ids: Vec<String>,
+        #[arg(long, short)]
+        yes: bool,
+    },
     /// Remove an add-on's files.
     Remove { ids: Vec<String> },
     /// Add-on repositories besides the CraftSpace registry (the ArtCraft Store, ones you add).
@@ -1213,7 +1219,7 @@ fn fmt_opt(v: Option<&Version>) -> String {
 }
 
 fn print_table(states: &[AppState]) {
-    println!("{:<12} {:<13} {:<11} {:<11} STATUS", "APP", "LIKE", "INSTALLED", "LATEST");
+    println!("{:<12} {:<11} {:<11} STATUS", "APP", "INSTALLED", "LATEST");
     for s in states {
         let status = if !s.known {
             "unknown (offline?)".to_string()
@@ -1229,9 +1235,8 @@ fn print_table(states: &[AppState]) {
             "available".into()
         };
         println!(
-            "{:<12} {:<13} {:<11} {:<11} {status}",
+            "{:<12} {:<11} {:<11} {status}",
             s.app.id,
-            s.app.like.as_deref().unwrap_or(""),
             fmt_opt(s.installed_version()),
             fmt_opt(s.latest_version()),
         );
@@ -1358,6 +1363,19 @@ fn addons_command(manager: &Manager, action: AddonAction) -> anyhow::Result<u32>
             }
             if let Some(home) = &a.homepage {
                 println!("More:    {home}");
+            }
+        }
+        AddonAction::Update { ids, yes } => {
+            let updates: Vec<String> = manager
+                .addon_updates()
+                .into_iter()
+                .filter(|a| ids.is_empty() || ids.contains(&a.id))
+                .map(|a| a.id)
+                .collect();
+            if updates.is_empty() {
+                say!("Add-ons are up to date.");
+            } else {
+                failed += addons_command(manager, AddonAction::Install { ids: updates, yes })?;
             }
         }
         AddonAction::Install { ids, yes } => {
