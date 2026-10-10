@@ -84,8 +84,7 @@ pub struct Settings {
     pub appearance: Appearance,
 }
 
-/// How CraftSpace looks besides light and dark, including options that move it away from the
-/// Creative Cloud look it started from.
+/// How CraftSpace looks besides light and dark. The default is [`Appearance::CRAFTSPACE`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Appearance {
@@ -139,9 +138,9 @@ impl Accent {
 #[serde(rename_all = "kebab-case")]
 pub enum Placeholder {
     /// The app's two-letter code on its colour.
-    #[default]
     Code,
     /// The app's first letter on a light tint of its colour.
+    #[default]
     Soft,
     /// The app's first letter in a circle of its colour.
     Letter,
@@ -151,9 +150,9 @@ pub enum Placeholder {
 #[serde(rename_all = "kebab-case")]
 pub enum Buttons {
     /// Outlined, rounded buttons.
-    #[default]
     Outlined,
     /// Buttons filled with a soft background, no outline.
+    #[default]
     Filled,
 }
 
@@ -161,8 +160,8 @@ pub enum Buttons {
 #[serde(rename_all = "kebab-case")]
 pub enum Corners {
     Square,
-    #[default]
     Standard,
+    #[default]
     Round,
 }
 
@@ -393,11 +392,11 @@ mod tests {
             serde_json::from_str(r#"{"appearance": {"placeholder": "soft", "accent": "coral"}}"#).unwrap();
         assert_eq!(s.appearance.placeholder, Placeholder::Soft);
         assert_eq!(s.appearance.accent, Accent::Coral);
-        assert_eq!(s.appearance.corners, Corners::Standard, "missing parts keep their defaults");
-        let json =
-            serde_json::to_value(Settings { appearance: Appearance::CRAFTSPACE, ..Settings::default() }).unwrap();
-        assert_eq!(json["appearance"]["buttons"], "filled");
-        assert_eq!(serde_json::from_str::<Settings>("{}").unwrap().appearance, Appearance::default());
+        assert_eq!(s.appearance.corners, Corners::Round, "missing parts keep their defaults");
+        let outlined = Appearance { buttons: Buttons::Outlined, ..Appearance::default() };
+        let json = serde_json::to_value(Settings { appearance: outlined, ..Settings::default() }).unwrap();
+        assert_eq!(json["appearance"]["buttons"], "outlined");
+        assert_eq!(serde_json::from_str::<Settings>("{}").unwrap().appearance, Appearance::CRAFTSPACE);
     }
 
     #[test]
