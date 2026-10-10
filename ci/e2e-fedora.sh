@@ -44,6 +44,6 @@ rpm -q gridcraft
 $cli config prefer_system_installer false
 $cli install gridcraft --version "$(rpm -q --qf '%{VERSION}' gridcraft)"
 ! rpm -q gridcraft
-test -x "$CRAFTSPACE_HOME/apps/gridcraft/"*/bin/gridcraft
+test -x "$CRAFTSPACE_HOME/apps/GridCraft/bin/gridcraft"
 $cli uninstall gridcraft --yes
 echo "Fedora end-to-end checks passed"
