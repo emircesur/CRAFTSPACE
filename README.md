@@ -8,7 +8,7 @@ DesignCraft, PdfCraft, FilmCraft, EffectCraft, SoundCraft, WordCraft, DeckCraft,
 CADCraft and ArtCraft). It's written in Rust and runs on Windows, macOS and Linux.
 
 
-![All apps](docs/screenshots/apps.png)
+![App library](docs/screenshots/apps.png)
 
 ## What it does
 
