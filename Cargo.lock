@@ -814,7 +814,7 @@ dependencies = [
 
 [[package]]
 name = "craftspace"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "craftspace-core",
@@ -839,7 +839,7 @@ dependencies = [
 
 [[package]]
 name = "craftspace-cli"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "clap",
@@ -853,7 +853,7 @@ dependencies = [
 
 [[package]]
 name = "craftspace-core"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "directories",
