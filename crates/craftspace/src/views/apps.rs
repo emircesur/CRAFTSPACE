@@ -16,7 +16,7 @@ pub fn sidebar(app: &mut CraftSpaceApp, ui: &mut Ui) {
     let updates = app.update_count();
 
     theme::section_label(ui, &p, "Apps");
-    nav(app, ui, "All apps", AppsView::All, Some(app.states.len()), false);
+    nav(app, ui, "App library", AppsView::All, Some(app.states.len()), false);
     nav(app, ui, "Updates", AppsView::Updates, (updates > 0).then_some(updates), true);
     nav(app, ui, "Installed", AppsView::Installed, Some(installed), false);
     if !app.manager.catalog().addons.is_empty() {
@@ -135,7 +135,7 @@ pub fn content(app: &mut CraftSpaceApp, ui: &mut Ui) {
     let title = match &app.apps_view {
         AppsView::Installed => "Installed".to_string(),
         AppsView::Category(c) => catalog.category_name(c),
-        _ => "All apps".into(),
+        _ => "App library".into(),
     };
     ui.horizontal(|ui| {
         ui.heading(title);
@@ -176,7 +176,7 @@ pub fn content(app: &mut CraftSpaceApp, ui: &mut Ui) {
                         .size(16.0),
                 );
                 if app.apps_view == AppsView::Installed {
-                    ui.label(RichText::new("Install an app from All apps and it shows up here.").color(p.weak));
+                    ui.label(RichText::new("Install an app from the App library and it shows up here.").color(p.weak));
                 }
             });
             return;
@@ -618,7 +618,7 @@ fn detail(app: &mut CraftSpaceApp, ui: &mut Ui, id: &str) {
         AppsView::Updates => "Updates".to_string(),
         AppsView::Installed => "Installed".into(),
         AppsView::Category(c) => app.manager.catalog().category_name(c),
-        _ => "All apps".into(),
+        _ => "App library".into(),
     };
     if ui.add(egui::Button::new(RichText::new(format!("‹  {back_label}")).color(p.weak)).frame(false)).clicked() {
         app.actions.push(Action::GoApps(app.back_view.clone()));

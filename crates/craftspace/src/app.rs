@@ -1505,7 +1505,7 @@ impl CraftSpaceApp {
             egui::Image::new(&theme::logo(ui.ctx())).paint_at(ui, rect);
             let name =
                 ui.add(egui::Label::new(RichText::new("CraftSpace").size(17.0).strong()).sense(egui::Sense::click()));
-            if (logo | name).on_hover_text("All apps").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+            if (logo | name).on_hover_text("App library").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                 self.search.clear();
                 self.actions.push(Action::GoApps(AppsView::All));
             }

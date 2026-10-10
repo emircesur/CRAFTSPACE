@@ -31,8 +31,9 @@ pub const DARK: Palette = Palette {
     stroke: Color32::from_rgb(0x3A, 0x3A, 0x40),
     text: Color32::from_rgb(0xEC, 0xEC, 0xEE),
     weak: Color32::from_rgb(0xA0, 0xA0, 0xA8),
-    accent: Color32::from_rgb(0x3B, 0x82, 0xF6),
-    accent_text: Color32::WHITE,
+    // The lemon lime of CraftSpace's octopus logo, with dark text on it.
+    accent: Color32::from_rgb(0xD4, 0xF4, 0x24),
+    accent_text: Color32::from_rgb(0x17, 0x19, 0x0A),
     good: Color32::from_rgb(0x34, 0xC7, 0x7B),
     warn: Color32::from_rgb(0xF5, 0xA5, 0x24),
     bad: Color32::from_rgb(0xF0, 0x5A, 0x5A),
@@ -47,7 +48,8 @@ pub const LIGHT: Palette = Palette {
     stroke: Color32::from_rgb(0xDE, 0xDE, 0xE3),
     text: Color32::from_rgb(0x1D, 0x1D, 0x22),
     weak: Color32::from_rgb(0x6B, 0x6B, 0x75),
-    accent: Color32::from_rgb(0x1D, 0x6F, 0xE8),
+    // The logo's lime, deepened so it reads on white.
+    accent: Color32::from_rgb(0x5C, 0x7F, 0x00),
     accent_text: Color32::WHITE,
     good: Color32::from_rgb(0x1E, 0x9E, 0x5A),
     warn: Color32::from_rgb(0xC2, 0x7A, 0x00),

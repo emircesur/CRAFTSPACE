@@ -114,7 +114,7 @@ pub fn window(app: &mut CraftSpaceApp, ctx: &egui::Context) {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let ready = matches!(d.check, Some(Ok(_))) && !d.working;
             let label = if d.target == Target::NewApp { "Add" } else { "Use this repository" };
-            if ui.add_enabled(ready, egui::Button::new(RichText::new(label).color(egui::Color32::WHITE)).fill(p.accent).corner_radius(15)).clicked() {
+            if ui.add_enabled(ready, egui::Button::new(RichText::new(label).color(p.accent_text)).fill(p.accent).corner_radius(15)).clicked() {
                 d.working = true;
                 let op = match &d.target {
                     Target::NewApp => SourceOp::Add { repo: d.repo.clone(), name: d.name.clone(), binary: d.binary.clone() },
