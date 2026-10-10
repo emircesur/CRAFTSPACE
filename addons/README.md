@@ -82,6 +82,7 @@ them in the app.
 | `app:config/Templates` | EffectCraft's project templates | `.ectemplate` |
 | `app:config/Presets` | SoundCraft's plug-in presets | per-plug-in folders of `.json` |
 | `plugins` | The app's plug-in folder (PhotoCraft, VectorCraft, EffectCraft) | `.wasm` |
+| `actions` | PhotoCraft's Actions panel: a file `{"version": 1, "actions": [...], "shortcuts": {name: key}}` is merged in (keys already used are left alone) and taken out again on removal | actions that run a plug-in |
 | `clap`, `vst3`, `au` | The per-user audio plug-in folders (bundles found anywhere in the download) | SoundCraft plug-ins |
 | `library` | `Documents/CraftSpace Add-ons/<name>`, for content the app imports itself; `"open": true` opens it in the app (PhotoCraft imports `.abr`, `.grd`, `.aco`, `.ase` that way) | LUTs, LightCraft presets, brushes |
 

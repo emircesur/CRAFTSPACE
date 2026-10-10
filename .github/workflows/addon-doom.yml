@@ -1,0 +1,66 @@
+# Builds the Doom add-on (addons/doom) and, when run by hand with "publish", attaches it to the
+# addon-doom release that addons/registry.json points to. The tag has no number in it on
+# purpose: CraftSpace reads this repository's releases for its own updates, and a tag like
+# addon-doom-1.0.0 would look like CraftSpace 1.0.0.
+name: Doom add-on
+
+on:
+  push:
+    branches: [main]
+    paths: ["addons/doom/**", ".github/workflows/addon-doom.yml"]
+  pull_request:
+    paths: ["addons/doom/**", ".github/workflows/addon-doom.yml"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Attach the build to the addon-doom release
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q clang lld
+          clang --version | head -1
+      - name: Build
+        run: addons/doom/package.sh dist
+      - name: Plays in PhotoCraft's plug-in host
+        run: |
+          # The plug-in, run by photocraft-cli from the latest PhotoCraft release.
+          url=$(curl -fsSL https://api.github.com/repos/storytold/photocraft/releases/latest \
+            | python3 -c "import json,sys;print(next(a['browser_download_url'] for a in json.load(sys.stdin)['assets'] if a['name'].endswith('linux-x86_64.tar.gz')))")
+          mkdir -p pc && curl -fsSL "$url" | tar -xz -C pc
+          cli=$(find pc -name photocraft-cli -type f | head -1)
+          wasm=dist/work/doom-photocraft.wasm
+          run=(--cmd plugin.install --params "{\"path\":\"$wasm\"}")
+          for m in Forward Forward "Turn left" Fire Use; do
+            run+=(--cmd plugin.run --params "{\"id\":\"org.craftspace.doom\",\"params\":{\"move\":\"$m\",\"tics\":6}}")
+          done
+          "$cli" run --new '{"width":640,"height":400,"mode":"rgb","depth":8}' "${run[@]}" --out dist/doom.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: craftspace-doom
+          path: |
+            dist/craftspace-doom-*.zip
+            dist/doom.png
+      - name: Publish
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          file=$(ls dist/craftspace-doom-*.zip)
+          tag="addon-doom"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "Doom add-on" --latest=false \
+              --notes "Doom for PhotoCraft (CraftSpace add-on). Install it from CraftSpace › Fonts & add-ons. Source: addons/doom."
+          fi
+          gh release upload "$tag" "$file" --clobber
+          sha256sum "$file"

@@ -2284,14 +2284,20 @@ impl Manager {
             for path in &report.written {
                 remove_any(path);
             }
+            let _ = self.unmerge_actions(&report.actions);
             return Err(err);
         }
-        anyhow::ensure!(!report.written.is_empty(), "{} has nothing for this computer", addon.name);
+        anyhow::ensure!(
+            !report.written.is_empty() || !report.actions.is_empty(),
+            "{} has nothing for this computer",
+            addon.name
+        );
         let installed = addons::Installed {
             version: addon.version.clone(),
             source: addon.source.clone(),
             paths: report.written.clone(),
             installed_at: github::now_secs(),
+            actions: report.actions.clone(),
         };
         self.with_db(|db| db.addons.insert(addon.id.clone(), installed))?;
         Ok(report)
@@ -2318,6 +2324,11 @@ impl Manager {
                             step.to.to_uppercase(),
                             dir.display()
                         ));
+                    }
+                }
+                "actions" => {
+                    for (_, src) in addons::matching_files(content, &step.files) {
+                        self.merge_actions(&app, &src, report)?;
                     }
                 }
                 "plugins" => {
@@ -2392,6 +2403,113 @@ impl Manager {
 
     /// Where an app loads WebAssembly plug-ins from: the folder chosen in its preferences, else
     /// CraftSpace's own folder, which is then chosen for it.
+    /// PhotoCraft's settings folder (where `Presets/actions.json` and `preferences.json` are).
+    fn photocraft_config(&self) -> anyhow::Result<PathBuf> {
+        let (spec, ctx, _) = self.profile_target("photocraft")?;
+        spec.roots
+            .iter()
+            .find(|r| r.key == "config")
+            .and_then(|r| profiles::root_dir(r, &ctx))
+            .ok_or_else(|| anyhow::anyhow!("PhotoCraft has no settings folder here"))
+    }
+
+    /// Add an add-on's actions to PhotoCraft's Actions panel (`file`: `{"version": 1,
+    /// "actions": [...], "shortcuts": {name: key}}`), replacing ones of the same name, and bind
+    /// their keys where the key isn't taken.
+    fn merge_actions(&self, app: &AppEntry, file: &Path, report: &mut addons::Report) -> anyhow::Result<()> {
+        anyhow::ensure!(app.id == "photocraft", "only PhotoCraft takes actions");
+        anyhow::ensure!(
+            !self.is_running("photocraft"),
+            "PhotoCraft is open; close it first (it reads its actions when it starts)"
+        );
+        let add: serde_json::Value = serde_json::from_slice(&std::fs::read(file)?)?;
+        let new = add.get("actions").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let names: Vec<String> =
+            new.iter().filter_map(|a| a.get("name").and_then(|n| n.as_str()).map(String::from)).collect();
+        anyhow::ensure!(!names.is_empty(), "{} has no actions", file.display());
+        let config = self.photocraft_config()?;
+        let read =
+            |file: &Path| std::fs::read(file).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+
+        let actions_file = config.join("Presets").join("actions.json");
+        let mut list = read(&actions_file).unwrap_or_else(|| serde_json::json!({"version": 1, "actions": []}));
+        anyhow::ensure!(
+            list.get("version") == Some(&serde_json::json!(1)),
+            "PhotoCraft's actions.json is a newer version"
+        );
+        let actions = list
+            .get_mut("actions")
+            .and_then(|a| a.as_array_mut())
+            .ok_or_else(|| anyhow::anyhow!("PhotoCraft's actions.json isn't readable"))?;
+        actions.retain(|a| a.get("name").and_then(|n| n.as_str()).is_none_or(|n| !names.iter().any(|x| x == n)));
+        actions.extend(new);
+        std::fs::create_dir_all(actions_file.parent().expect("has a folder"))?;
+        write_atomic(&actions_file, serde_json::to_vec_pretty(&list)?.as_slice())?;
+        report.actions.extend(names.iter().map(|n| (app.id.clone(), n.clone())));
+
+        let prefs_file = config.join("preferences.json");
+        let mut prefs = read(&prefs_file).unwrap_or_else(|| serde_json::json!({}));
+        let shortcuts = prefs
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("PhotoCraft's preferences aren't readable"))?
+            .entry("shortcuts")
+            .or_insert_with(|| serde_json::json!({}));
+        let map = shortcuts.as_object_mut().ok_or_else(|| anyhow::anyhow!("PhotoCraft's shortcuts aren't readable"))?;
+        let (mut bound, mut skipped) = (0, Vec::new());
+        if let Some(keys) = add.get("shortcuts").and_then(|s| s.as_object()) {
+            for (name, key) in keys {
+                let Some(key) = key.as_str() else { continue };
+                let id = format!("actions.play:{name}");
+                let taken = map.iter().any(|(other, k)| other != &id && k.as_str() == Some(key));
+                if taken {
+                    skipped.push(key.to_string());
+                } else {
+                    map.insert(id, serde_json::json!(key));
+                    bound += 1;
+                }
+            }
+        }
+        write_atomic(&prefs_file, serde_json::to_vec_pretty(&prefs)?.as_slice())?;
+        report.notes.push(format!(
+            "PhotoCraft: {} actions in the Actions panel, {bound} with keys{}",
+            names.len(),
+            if skipped.is_empty() {
+                String::new()
+            } else {
+                format!(" ({} already used: {})", skipped.len(), skipped.join(", "))
+            }
+        ));
+        Ok(())
+    }
+
+    /// Take merged actions (and their keys) out of the apps' lists again.
+    fn unmerge_actions(&self, merged: &[(String, String)]) -> anyhow::Result<()> {
+        let names: Vec<&str> = merged.iter().filter(|(app, _)| app == "photocraft").map(|(_, n)| n.as_str()).collect();
+        if names.is_empty() {
+            return Ok(());
+        }
+        let config = self.photocraft_config()?;
+        let read =
+            |file: &Path| std::fs::read(file).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+        let actions_file = config.join("Presets").join("actions.json");
+        if let Some(mut list) = read(&actions_file) {
+            if let Some(actions) = list.get_mut("actions").and_then(|a| a.as_array_mut()) {
+                actions.retain(|a| a.get("name").and_then(|n| n.as_str()).is_none_or(|n| !names.contains(&n)));
+                write_atomic(&actions_file, serde_json::to_vec_pretty(&list)?.as_slice())?;
+            }
+        }
+        let prefs_file = config.join("preferences.json");
+        if let Some(mut prefs) = read(&prefs_file) {
+            if let Some(map) = prefs.get_mut("shortcuts").and_then(|s| s.as_object_mut()) {
+                for n in &names {
+                    map.remove(&format!("actions.play:{n}"));
+                }
+                write_atomic(&prefs_file, serde_json::to_vec_pretty(&prefs)?.as_slice())?;
+            }
+        }
+        Ok(())
+    }
+
     fn plugin_folder(&self, app: &AppEntry, report: &mut addons::Report) -> anyhow::Result<PathBuf> {
         let ours = self.inner.paths.root.join("addons").join("plug-ins").join(&app.id);
         let (spec, ctx, _) = self.profile_target(&app.id)?;
@@ -2469,6 +2587,7 @@ impl Manager {
         let _busy = self.mark_busy(&format!("addon:{id}"))?;
         let installed =
             self.with_db(|db| db.addons.remove(id))?.ok_or_else(|| anyhow::anyhow!("{id} isn't installed"))?;
+        self.unmerge_actions(&installed.actions)?;
         let library = self.addon_library();
         for path in &installed.paths {
             remove_any(path);

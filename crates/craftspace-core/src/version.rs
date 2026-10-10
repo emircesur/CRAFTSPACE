@@ -45,6 +45,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn addon_release_tags_arent_versions() {
+        // This repository's add-on downloads are released under number-free tags, so CraftSpace
+        // never takes one for an update of itself.
+        assert_eq!(parse_tag("addon-doom"), None);
+    }
+
+    #[test]
     fn parses_common_tags() {
         assert_eq!(parse_tag("v0.5.0"), Some(Version::new(0, 5, 0)));
         assert_eq!(parse_tag("0.5.0"), Some(Version::new(0, 5, 0)));

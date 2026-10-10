@@ -1,0 +1,279 @@
+{
+  "version": 1,
+  "actions": [
+    {
+      "name": "Doom: Forward",
+      "steps": [
+        [
+          "plugin.run",
+          {
+            "id": "org.craftspace.doom",
+            "params": {
+              "move": "Forward",
+              "tics": 5
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Doom: Back",
+      "steps": [
+        [
+          "plugin.run",
+          {
+            "id": "org.craftspace.doom",
+            "params": {
+              "move": "Back",
+              "tics": 5
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Doom: Turn left",
+      "steps": [
+        [
+          "plugin.run",
+          {
+            "id": "org.craftspace.doom",
+            "params": {
+              "move": "Turn left",
+              "tics": 4
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Doom: Turn right",
+      "steps": [
+        [
+          "plugin.run",
+          {
+            "id": "org.craftspace.doom",
+            "params": {
+              "move": "Turn right",
+              "tics": 4
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Doom: Strafe left",
+      "steps": [
+        [
+          "plugin.run",
+          {
+            "id": "org.craftspace.doom",
+            "params": {
+              "move": "Strafe left",
+              "tics": 5
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Doom: Strafe right",
+      "steps": [
+        [
+          "plugin.run",
+          {
+            "id": "org.craftspace.doom",
+            "params": {
+              "move": "Strafe right",
+              "tics": 5
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Doom: Fire",
+      "steps": [
+        [
+          "plugin.run",
+          {
+            "id": "org.craftspace.doom",
+            "params": {
+              "move": "Fire",
+              "tics": 6
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Doom: Use",
+      "steps": [
+        [
+          "plugin.run",
+          {
+            "id": "org.craftspace.doom",
+            "params": {
+              "move": "Use",
+              "tics": 5
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Doom: Forward and fire",
+      "steps": [
+        [
+          "plugin.run",
+          {
+            "id": "org.craftspace.doom",
+            "params": {
+              "move": "Forward and fire",
+              "tics": 5
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Doom: Turn around",
+      "steps": [
+        [
+          "plugin.run",
+          {
+            "id": "org.craftspace.doom",
+            "params": {
+              "move": "Turn around",
+              "tics": 6
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Doom: Wait",
+      "steps": [
+        [
+          "plugin.run",
+          {
+            "id": "org.craftspace.doom",
+            "params": {
+              "move": "Wait",
+              "tics": 10
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Doom: Weapon 1",
+      "steps": [
+        [
+          "plugin.run",
+          {
+            "id": "org.craftspace.doom",
+            "params": {
+              "move": "Weapon 1",
+              "tics": 3
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Doom: Weapon 2",
+      "steps": [
+        [
+          "plugin.run",
+          {
+            "id": "org.craftspace.doom",
+            "params": {
+              "move": "Weapon 2",
+              "tics": 3
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Doom: Weapon 3",
+      "steps": [
+        [
+          "plugin.run",
+          {
+            "id": "org.craftspace.doom",
+            "params": {
+              "move": "Weapon 3",
+              "tics": 3
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Doom: Weapon 4",
+      "steps": [
+        [
+          "plugin.run",
+          {
+            "id": "org.craftspace.doom",
+            "params": {
+              "move": "Weapon 4",
+              "tics": 3
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Doom: Weapon 5",
+      "steps": [
+        [
+          "plugin.run",
+          {
+            "id": "org.craftspace.doom",
+            "params": {
+              "move": "Weapon 5",
+              "tics": 3
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "name": "Doom: New game",
+      "steps": [
+        [
+          "plugin.run",
+          {
+            "id": "org.craftspace.doom",
+            "params": {
+              "move": "New game",
+              "tics": 1
+            }
+          }
+        ]
+      ]
+    }
+  ],
+  "shortcuts": {
+    "Doom: Forward": "Alt+Shift+W",
+    "Doom: Back": "Alt+Shift+S",
+    "Doom: Turn left": "Alt+Shift+A",
+    "Doom: Turn right": "Alt+Shift+D",
+    "Doom: Strafe left": "Alt+Shift+Q",
+    "Doom: Strafe right": "Alt+Shift+E",
+    "Doom: Fire": "Alt+Shift+F",
+    "Doom: Use": "Alt+Shift+Space",
+    "Doom: Forward and fire": "Alt+Shift+R",
+    "Doom: Turn around": "Alt+Shift+X",
+    "Doom: Wait": "Alt+Shift+Period",
+    "Doom: Weapon 1": "Alt+Shift+1",
+    "Doom: Weapon 2": "Alt+Shift+2",
+    "Doom: Weapon 3": "Alt+Shift+3",
+    "Doom: Weapon 4": "Alt+Shift+4",
+    "Doom: Weapon 5": "Alt+Shift+5",
+    "Doom: New game": "Alt+Shift+N"
+  }
+}

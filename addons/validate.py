@@ -17,7 +17,7 @@ import urllib.request
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 KINDS = {"pack", "plugin", "audio-plugin"}
 PLATFORMS = {"linux-x86_64", "linux-aarch64", "windows-x64", "windows-arm64", "macos", "linux", "windows"}
-TARGETS = {"library", "plugins", "clap", "vst3", "au"}
+TARGETS = {"library", "plugins", "actions", "clap", "vst3", "au"}
 # The app folders add-ons may write to (see crates/craftspace-core/src/profiles/specs.rs).
 APP_ROOTS = {
     "photocraft": {"config"}, "lightcraft": {"config", "library"}, "vectorcraft": {"config"},
@@ -81,6 +81,8 @@ def main():
                     err(where, "install: no .. in paths")
             elif to not in TARGETS:
                 err(where, f"install: to is app:<folder>/<path> or one of {sorted(TARGETS)}")
+            if to == "actions" and app != "photocraft":
+                err(where, "install: only photocraft takes actions")
             if to == "plugins" and app not in PLUGIN_APPS:
                 err(where, f"install: {app} doesn't take plug-ins")
             if to in {"clap", "vst3", "au"} and app != "soundcraft":

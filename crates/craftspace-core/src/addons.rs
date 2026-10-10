@@ -272,6 +272,7 @@ pub fn check_catalog(text: &str, catalog: &crate::catalog::Catalog) -> Vec<Strin
             let known = step.to == "library"
                 || (step.to == "plugins" && plugin_folder_app(&step.app))
                 || (["clap", "vst3", "au"].contains(&step.to.as_str()) && step.app == "soundcraft")
+                || (step.to == "actions" && step.app == "photocraft")
                 || step.to.strip_prefix("app:").is_some_and(|t| {
                     let root = t.split('/').next().unwrap_or_default();
                     !t.split('/').any(|part| part == "..")
@@ -566,18 +567,23 @@ pub struct Installed {
     pub version: Option<String>,
     #[serde(default)]
     pub source: String,
-    /// Files and bundle folders written.
+    /// Files and bundle folders written (and, at install, actions merged: see `actions`).
     #[serde(default)]
     pub paths: Vec<PathBuf>,
     /// Unix seconds.
     #[serde(default)]
     pub installed_at: u64,
+    /// Actions merged into an app's own list (`to: "actions"`): (app, action name).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<(String, String)>,
 }
 
 /// What happened, for people.
 #[derive(Debug, Clone, Default)]
 pub struct Report {
     pub written: Vec<PathBuf>,
+    /// Actions merged into an app's list: (app, action name).
+    pub actions: Vec<(String, String)>,
     /// Per app: where things went and how to use them.
     pub notes: Vec<String>,
 }
@@ -606,6 +612,7 @@ mod tests {
                 assert!(catalog.app(&step.app).is_some(), "{}: unknown app {}", a.id, step.app);
                 let known = step.to == "library"
                     || step.to == "plugins"
+                    || (step.to == "actions" && step.app == "photocraft")
                     || ["clap", "vst3", "au"].contains(&step.to.as_str())
                     || step.to.strip_prefix("app:").is_some_and(|t| {
                         let root = t.split('/').next().unwrap_or_default();
@@ -622,7 +629,8 @@ mod tests {
     fn the_packs_in_the_repository_match_the_registry() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../addons/packs");
         for a in Registry::builtin().addons.iter().filter(|a| a.checked()) {
-            for f in &a.files {
+            // Only the packs kept in the repository (others are release downloads).
+            for f in a.files.iter().filter(|f| f.url.contains("/addons/packs/")) {
                 let name = f.url.rsplit('/').next().unwrap();
                 let sha = crate::download::sha256_file(&dir.join(name)).unwrap();
                 assert_eq!(Some(sha), f.sha256, "{name}");
