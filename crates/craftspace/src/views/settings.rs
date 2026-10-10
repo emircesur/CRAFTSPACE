@@ -494,11 +494,7 @@ fn appearance(ui: &mut Ui, p: &theme::Palette, look: &mut craftspace_core::setti
         if ui.add_enabled(*look != own, egui::Button::new("Use the CraftSpace look")).clicked() {
             *look = own;
         }
-        ui.label(
-            RichText::new("Soft tiles, filled buttons and round corners, unlike Creative Cloud.")
-                .size(12.0)
-                .color(p.weak),
-        );
+        ui.label(RichText::new("Soft tiles, filled buttons and round corners.").size(12.0).color(p.weak));
     });
 }
 

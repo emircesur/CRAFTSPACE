@@ -95,12 +95,7 @@ pub const LIGHT: Palette = Palette {
     look: DEFAULT_LOOK,
 };
 
-const DEFAULT_LOOK: Appearance = Appearance {
-    accent: Accent::Lime,
-    placeholder: Placeholder::Code,
-    buttons: Buttons::Outlined,
-    corners: Corners::Standard,
-};
+const DEFAULT_LOOK: Appearance = Appearance::CRAFTSPACE;
 
 pub fn palette_for(theme: Theme, look: Appearance, ctx: &egui::Context) -> Palette {
     let base = match theme {

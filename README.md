@@ -39,8 +39,8 @@ CADCraft and ArtCraft). It's written in Rust and runs on Windows, macOS and Linu
   Anyone can [submit an add-on](addons/README.md#submitting-an-add-on).
 - **Appearance**: dark, light or matching the system, six accent colours, and a choice of
   placeholder icons (two-letter code, soft tile or letter), outlined or filled buttons and
-  square, standard or round corners. **Use the CraftSpace look** sets soft tiles, filled buttons
-  and round corners in one click.
+  square, standard or round corners. The CraftSpace look (soft tiles, filled buttons, round
+  corners) is the default; **Use the CraftSpace look** goes back to it in one click.
 - **Workspace sync**: save an app's workspaces, layouts, keyboard shortcuts, preferences and
   presets to a `.craftprofile` file and bring them into the app on another computer, choosing
   which parts. Recent files, window positions, folder paths and devices stay on each computer;
