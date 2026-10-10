@@ -5,6 +5,9 @@ played on a PhotoCraft canvas, a move per key press. Install it from CraftSpace 
 add-ons (`craftspace-cli addons install craftspace-doom`), make a 640 × 400 RGB document and
 press Alt+Shift+W, A, S, D. [`photocraft/README.txt`](photocraft/README.txt) has all the keys.
 
+The published plug-in now comes from [emircesur/doom-in-photocraft](https://github.com/emircesur/doom-in-photocraft),
+which also has installers that don't need CraftSpace; the registry points at its releases.
+
 ## How it works
 
 PhotoCraft's plug-ins are WebAssembly filters: each run gets the pixels and a few parameters,

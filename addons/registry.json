@@ -157,12 +157,12 @@
       "id": "craftspace-doom",
       "name": "Doom for PhotoCraft",
       "kind": "plugin",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "requires": "0.1.5",
       "author": "CraftSpace",
       "license": "GPL-2.0-or-later AND BSD-3-Clause",
       "trust": "checked",
-      "description": "Play Doom (Freedoom: Phase 1, episode 1) on a 640 x 400 PhotoCraft canvas, a move at a time: double-click the Doom moves in Window › Actions (PhotoCraft versions after 0.5.0 also play them with Alt+Shift+W A S D, Q E, F, Space). Undo takes a move back. The game is kept in the picture itself.",
+      "description": "Play Doom (Freedoom: Phase 1, episode 1) on a PhotoCraft canvas (640 x 400; on a larger document it takes the top-left 640 x 400), a move at a time: double-click the Doom moves in Window › Actions (PhotoCraft versions after 0.5.0 also play them with Alt+Shift+W A S D, Q E, F, Space). Undo takes a move back. The game is kept in the picture itself.",
       "apps": [
         "photocraft"
       ],
@@ -173,8 +173,8 @@
       "homepage": "https://github.com/emircesur/doom-in-photocraft",
       "files": [
         {
-          "url": "https://github.com/emircesur/CRAFTSPACE/releases/download/addon-doom/craftspace-doom-1.0.0.zip",
-          "sha256": "4542cf0851763e35db896b6541661b3a89bb5b103c48dfb42ef38264ac2f0f7a"
+          "url": "https://github.com/emircesur/doom-in-photocraft/releases/download/v1.0.1/doom-in-photocraft-1.0.1.zip",
+          "sha256": "c30ad92cc0de0d14ef822eac5eb4c966a6c7febe16c852c763bddad920e78ef9"
         }
       ],
       "install": [
