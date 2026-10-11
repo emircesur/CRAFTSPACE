@@ -244,6 +244,8 @@ pub struct CraftSpaceApp {
 
     pub settings: Settings,
     pub settings_draft: Option<Settings>,
+    /// The page Settings shows.
+    pub settings_page: crate::views::settings::Page,
     pub confirm_uninstall: Option<String>,
     pub confirm_reset: Option<String>,
     confirm_quit: bool,
@@ -356,6 +358,7 @@ impl CraftSpaceApp {
             shots_loading: HashSet::new(),
             settings,
             settings_draft: None,
+            settings_page: Default::default(),
             confirm_uninstall: None,
             confirm_reset: None,
             confirm_quit: false,
@@ -391,7 +394,7 @@ impl CraftSpaceApp {
                 cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
             }
         }
-        // `CRAFTSPACE_VIEW=files|discover|updates|installed|addons|settings|app:<id>` opens a specific
+        // `CRAFTSPACE_VIEW=files|discover|updates|installed|addons|settings[:<page>]|app:<id>` opens a specific
         // page (handy for screenshots and for jumping straight somewhere from a shortcut).
         if let Ok(view) = std::env::var("CRAFTSPACE_VIEW") {
             match view.as_str() {
@@ -407,6 +410,10 @@ impl CraftSpaceApp {
                 "about" => app.about_open = true,
                 "settings" => app.settings_draft = Some(app.settings.clone()),
                 other => {
+                    if let Some(page) = other.strip_prefix("settings:") {
+                        app.settings_draft = Some(app.settings.clone());
+                        app.settings_page = crate::views::settings::Page::from_name(page).unwrap_or_default();
+                    }
                     if let Some(rest) = other.strip_prefix("app:") {
                         let (id, tab) = rest.split_once(':').unwrap_or((rest, ""));
                         app.apps_view = AppsView::Detail(id.to_string());

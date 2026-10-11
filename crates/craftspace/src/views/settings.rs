@@ -19,7 +19,8 @@ pub fn window(app: &mut CraftSpaceApp, ctx: &egui::Context) {
     let free = |key: &str| !policy.locks(key);
 
     let modal = egui::Modal::new(egui::Id::new("settings")).show(ctx, |ui| {
-        ui.set_width(580.0);
+        ui.set_width(860.0);
+        let height = (ctx.content_rect().height() - 220.0).clamp(280.0, 580.0);
         ui.heading("Settings");
         if policy.is_active() {
             ui.add_space(4.0);
@@ -31,278 +32,315 @@ pub fn window(app: &mut CraftSpaceApp, ctx: &egui::Context) {
             }
         }
         ui.add_space(8.0);
-        egui::ScrollArea::vertical().max_height(ctx.content_rect().height() - 220.0).show(ui, |ui| {
-            section(ui, &p, "Updates");
-            ui.add_enabled(free("auto_check_updates"), egui::Checkbox::new(&mut draft.auto_check_updates, "Check for updates automatically"));
-            ui.add_enabled_ui(draft.auto_check_updates, |ui| {
-                ui.horizontal(|ui| {
-                    ui.add_space(24.0);
-                    ui.label("Every");
-                    ui.add_enabled(free("check_interval_hours"), egui::DragValue::new(&mut draft.check_interval_hours).range(1..=168).suffix(" h"));
-                });
-                ui.add_enabled(free("auto_install_updates"), egui::Checkbox::new(&mut draft.auto_install_updates, "Install updates as soon as they're found (open apps update when you close them)"));
-            });
-            ui.add_enabled(free("include_prereleases"), egui::Checkbox::new(&mut draft.include_prereleases, "Offer pre-releases (release candidates)"));
-            ui.label(RichText::new("Each app can follow its own channel or stay on a version: see its Overview page.").size(12.0).color(p.weak));
-            ui.add_enabled(free("keep_previous_version"), egui::Checkbox::new(&mut draft.keep_previous_version, "Keep the previous version after updating, so it can be rolled back"));
-            ui.add_enabled(free("auto_update_self"), egui::Checkbox::new(&mut draft.auto_update_self, "Update CraftSpace itself automatically (the new version runs from the next start)"));
-            ui.horizontal(|ui| {
-                ui.add_enabled(free("notifications"), egui::Checkbox::new(&mut draft.notifications, "Show notifications when updates are found or installed"));
-                if ui.small_button("Send a test").clicked() {
-                    app.actions.push(Action::TestNotification);
-                }
-            });
-
-            section(ui, &p, "Downloads");
-            ui.horizontal(|ui| {
-                ui.label("Download and install");
-                ui.add_enabled(free("max_parallel_downloads"), egui::DragValue::new(&mut draft.max_parallel_downloads).range(1..=6));
-                ui.label("apps at a time");
-            });
-            ui.horizontal(|ui| {
-                let mut limited = draft.download_limit_kbps.is_some();
-                ui.add_enabled(free("download_limit_kbps"), egui::Checkbox::new(&mut limited, "Limit download speed to"));
-                let mut kbps = draft.download_limit_kbps.unwrap_or(2048);
-                ui.add_enabled(limited && free("download_limit_kbps"), egui::DragValue::new(&mut kbps).range(64..=1_000_000).suffix(" KB/s").speed(16));
-                draft.download_limit_kbps = limited.then_some(kbps);
-            });
-            ui.label(RichText::new("Interrupted downloads continue where they stopped.").size(12.0).color(p.weak));
-            ui.add_enabled(free("allow_unverified_downloads"), egui::Checkbox::new(&mut draft.allow_unverified_downloads, "Allow packages that publish no checksum (not recommended)"));
-
-            section(ui, &p, "Installation");
-            ui.add_enabled(free("detect_installed"), egui::Checkbox::new(&mut draft.detect_installed, "Find ArtCraft apps installed without CraftSpace, and update them where they are"))
-                .on_hover_text("Apps from their own installers, disk images, packages or Flatpak, and portable copies in your usual folders.");
-            ui.label("Install apps in");
-            ui.horizontal(|ui| {
-                let current = draft.install_dir.clone().unwrap_or_else(|| app.manager.paths().apps.clone());
-                ui.add(egui::Label::new(RichText::new(current.display().to_string()).monospace()).truncate());
-                ui.add_enabled_ui(free("install_dir"), |ui| {
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if draft.install_dir.is_some() && ui.button("Default").clicked() {
-                            draft.install_dir = None;
-                        }
-                        if ui.button("Change…").clicked() {
-                            if let Some(dir) = rfd::FileDialog::new().set_title("Install ArtCraft apps in").pick_folder() {
-                                draft.install_dir = Some(dir);
-                            }
-                        }
-                    });
-                });
-            });
-            ui.label(
-                RichText::new("Apps already installed stay where they are. To put one app somewhere else, use \"Install in a folder…\" in its ••• menu.")
-                    .size(12.0)
-                    .color(p.weak),
-            );
-            if os == Os::Linux && draft.prefer_system_installer && craftspace_core::platform::linux_package_format().is_some() {
-                ui.label(
-                    RichText::new("System packages go where the package manager puts them (/usr). Turn off \"Install apps as system packages\" below to install into this folder instead.")
-                        .size(12.0)
-                        .color(p.warn),
-                );
-            }
-            if os != Os::Macos {
-                ui.add_enabled(free("desktop_shortcuts"), egui::Checkbox::new(&mut draft.desktop_shortcuts, "Add desktop shortcuts"));
-            }
-            match os {
-                Os::Windows => {
-                    if ui
-                        .add_enabled(free("prefer_system_installer"), egui::Checkbox::new(&mut draft.prefer_system_installer, "Use each app's installer (MSI or Setup) instead of the portable build"))
-                        .on_hover_text("Installers put apps in Program Files and may ask for administrator rights. Portable installs are per-user and can be rolled back.")
-                        .changed()
-                    {
-                        draft.install_mode_chosen = true;
+        ui.horizontal_top(|ui| {
+            // The menu.
+            ui.allocate_ui_with_layout(Vec2::new(190.0, height), Layout::top_down(Align::Min), |ui| {
+                ui.set_min_size(Vec2::new(190.0, height));
+                for page in Page::ALL {
+                    if nav(ui, &p, page.label(), app.settings_page == page) {
+                        app.settings_page = page;
                     }
                 }
-                Os::Linux => {
-                    if let Some(format) = craftspace_core::platform::linux_package_format() {
-                        let (ext, tool) = if format == craftspace_core::platform::AssetKind::Rpm { (".rpm", "dnf") } else { (".deb", "apt") };
+            });
+            // A divider as tall as the pages (a separator here would grow to the modal's unbounded
+            // height).
+            let (line, _) = ui.allocate_exact_size(Vec2::new(17.0, height), egui::Sense::hover());
+            ui.painter().vline(line.center().x, line.y_range(), egui::Stroke::new(1.0, p.stroke));
+            // The chosen page.
+            let page = app.settings_page;
+            let width = ui.available_width();
+            ui.allocate_ui_with_layout(Vec2::new(width, height), Layout::top_down(Align::Min), |ui| {
+            egui::ScrollArea::vertical().id_salt(("settings-page", page)).max_height(height).auto_shrink([false, false]).show(ui, |ui| {
+                ui.label(RichText::new(page.label()).size(20.0).strong().color(p.text));
+                ui.label(RichText::new(page.description()).size(12.5).color(p.weak));
+                ui.add_space(6.0);
+                match page {
+                    Page::General => {
+                        section(ui, &p, "When you close the window");
+                ui.add_enabled(free("keep_running_in_tray"), egui::Checkbox::new(&mut draft.keep_running_in_tray, "Keep CraftSpace running in the tray to check for updates"));
+                ui.add_enabled(free("start_at_login"), egui::Checkbox::new(&mut draft.start_at_login, "Start CraftSpace in the background when I log in"));
+
+                        section(ui, &p, "Your apps");
+                ui.label(RichText::new("Save the list of installed apps (with versions and channels) to set up another computer the same way.").color(p.weak));
+                ui.horizontal(|ui| {
+                    if ui.button("Export app list…").clicked() {
+                        app.actions.push(Action::ExportList);
+                    }
+                    if ui.button("Import app list…").clicked() {
+                        app.actions.push(Action::ImportList);
+                    }
+                });
+
+                    }
+                    Page::Updates => {
+                ui.add_enabled(free("auto_check_updates"), egui::Checkbox::new(&mut draft.auto_check_updates, "Check for updates automatically"));
+                ui.add_enabled_ui(draft.auto_check_updates, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add_space(24.0);
+                        ui.label("Every");
+                        ui.add_enabled(free("check_interval_hours"), egui::DragValue::new(&mut draft.check_interval_hours).range(1..=168).suffix(" h"));
+                    });
+                    ui.add_enabled(free("auto_install_updates"), egui::Checkbox::new(&mut draft.auto_install_updates, "Install updates as soon as they're found (open apps update when you close them)"));
+                });
+                ui.add_enabled(free("include_prereleases"), egui::Checkbox::new(&mut draft.include_prereleases, "Offer pre-releases (release candidates)"));
+                ui.label(RichText::new("Each app can follow its own channel or stay on a version: see its Overview page.").size(12.0).color(p.weak));
+                ui.add_enabled(free("keep_previous_version"), egui::Checkbox::new(&mut draft.keep_previous_version, "Keep the previous version after updating, so it can be rolled back"));
+                ui.add_enabled(free("auto_update_self"), egui::Checkbox::new(&mut draft.auto_update_self, "Update CraftSpace itself automatically (the new version runs from the next start)"));
+                ui.horizontal(|ui| {
+                    ui.add_enabled(free("notifications"), egui::Checkbox::new(&mut draft.notifications, "Show notifications when updates are found or installed"));
+                    if ui.small_button("Send a test").clicked() {
+                        app.actions.push(Action::TestNotification);
+                    }
+                });
+
+                    }
+                    Page::Downloads => {
+                ui.horizontal(|ui| {
+                    ui.label("Download and install");
+                    ui.add_enabled(free("max_parallel_downloads"), egui::DragValue::new(&mut draft.max_parallel_downloads).range(1..=6));
+                    ui.label("apps at a time");
+                });
+                ui.horizontal(|ui| {
+                    let mut limited = draft.download_limit_kbps.is_some();
+                    ui.add_enabled(free("download_limit_kbps"), egui::Checkbox::new(&mut limited, "Limit download speed to"));
+                    let mut kbps = draft.download_limit_kbps.unwrap_or(2048);
+                    ui.add_enabled(limited && free("download_limit_kbps"), egui::DragValue::new(&mut kbps).range(64..=1_000_000).suffix(" KB/s").speed(16));
+                    draft.download_limit_kbps = limited.then_some(kbps);
+                });
+                ui.label(RichText::new("Interrupted downloads continue where they stopped.").size(12.0).color(p.weak));
+                ui.add_enabled(free("allow_unverified_downloads"), egui::Checkbox::new(&mut draft.allow_unverified_downloads, "Allow packages that publish no checksum (not recommended)"));
+
+                    }
+                    Page::Installation => {
+                ui.add_enabled(free("detect_installed"), egui::Checkbox::new(&mut draft.detect_installed, "Find ArtCraft apps installed without CraftSpace, and update them where they are"))
+                    .on_hover_text("Apps from their own installers, disk images, packages or Flatpak, and portable copies in your usual folders.");
+                ui.label("Install apps in");
+                ui.horizontal(|ui| {
+                    let current = draft.install_dir.clone().unwrap_or_else(|| app.manager.paths().apps.clone());
+                    ui.add(egui::Label::new(RichText::new(current.display().to_string()).monospace()).truncate());
+                    ui.add_enabled_ui(free("install_dir"), |ui| {
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if draft.install_dir.is_some() && ui.button("Default").clicked() {
+                                draft.install_dir = None;
+                            }
+                            if ui.button("Change…").clicked() {
+                                if let Some(dir) = rfd::FileDialog::new().set_title("Install ArtCraft apps in").pick_folder() {
+                                    draft.install_dir = Some(dir);
+                                }
+                            }
+                        });
+                    });
+                });
+                ui.label(
+                    RichText::new("Apps already installed stay where they are. To put one app somewhere else, use \"Install in a folder…\" in its ••• menu.")
+                        .size(12.0)
+                        .color(p.weak),
+                );
+                if os == Os::Linux && draft.prefer_system_installer && craftspace_core::platform::linux_package_format().is_some() {
+                    ui.label(
+                        RichText::new("System packages go where the package manager puts them (/usr). Turn off \"Install apps as system packages\" below to install into this folder instead.")
+                            .size(12.0)
+                            .color(p.warn),
+                    );
+                }
+                if os != Os::Macos {
+                    ui.add_enabled(free("desktop_shortcuts"), egui::Checkbox::new(&mut draft.desktop_shortcuts, "Add desktop shortcuts"));
+                }
+                match os {
+                    Os::Windows => {
                         if ui
-                            .add_enabled(free("prefer_system_installer"), egui::Checkbox::new(&mut draft.prefer_system_installer, format!("Install apps as system packages ({ext} through {tool})")))
-                            .on_hover_text("The package manager owns the files; CraftSpace still finds and installs updates. Installing asks for your password.")
+                            .add_enabled(free("prefer_system_installer"), egui::Checkbox::new(&mut draft.prefer_system_installer, "Use each app's installer (MSI or Setup) instead of the portable build"))
+                            .on_hover_text("Installers put apps in Program Files and may ask for administrator rights. Portable installs are per-user and can be rolled back.")
                             .changed()
                         {
                             draft.install_mode_chosen = true;
                         }
                     }
-                    ui.add_enabled(free("prefer_appimage"), egui::Checkbox::new(&mut draft.prefer_appimage, "Install AppImages, so updates only download what changed"))
-                        .on_hover_text("Uses the .zsync files published with each release. How much is saved depends on how much changed between versions.");
-                }
-                _ => {}
-            }
-
-            section(ui, &p, "Files");
-            let f = &app.settings.files;
-            let mut on: Vec<&str> = Vec::new();
-            if f.app_recents {
-                on.push("apps' recent files");
-            }
-            if f.thumbnails {
-                on.push("thumbnails");
-            }
-            if f.watch {
-                on.push("live updates");
-            }
-            if f.find_portable {
-                on.push("portable settings import");
-            }
-            let types = f.open_with_craftspace.len();
-            if types > 0 {
-                on.push("opening file types");
-            }
-            ui.label(if on.is_empty() { "All optional Files features are off.".to_string() } else { format!("On: {}.", on.join(", ")) });
-            if types > 0 {
-                ui.label(RichText::new(format!("CraftSpace opens {types} file type{}.", if types == 1 { "" } else { "s" })).size(12.0).color(p.weak));
-            }
-            if ui.button("Choose Files features…").clicked() {
-                app.actions.push(Action::OpenFilesSetup);
-            }
-
-            section(ui, &p, "When you close the window");
-            ui.add_enabled(free("keep_running_in_tray"), egui::Checkbox::new(&mut draft.keep_running_in_tray, "Keep CraftSpace running in the tray to check for updates"));
-            ui.add_enabled(free("start_at_login"), egui::Checkbox::new(&mut draft.start_at_login, "Start CraftSpace in the background when I log in"));
-
-            section(ui, &p, "Appearance");
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut draft.theme, Theme::Dark, "Dark");
-                ui.selectable_value(&mut draft.theme, Theme::Light, "Light");
-                ui.selectable_value(&mut draft.theme, Theme::System, "Match system");
-            });
-            appearance(ui, &p, &mut draft.appearance);
-            if os == Os::Macos {
-                use craftspace_core::settings::DockIcon;
-                ui.add_space(4.0);
-                ui.label("Dock icon");
-                ui.radio_value(&mut draft.dock_icon, DockIcon::ColorWhenOpen, "Full colour while the window is open, macOS's icon style otherwise");
-                ui.radio_value(&mut draft.dock_icon, DockIcon::Color, "Always full colour");
-                ui.radio_value(&mut draft.dock_icon, DockIcon::System, "Always macOS's icon style (dark, clear or tinted, like the ArtCraft apps)");
-                ui.label(RichText::new("The icon style is chosen in System Settings › Appearance.").size(12.0).color(p.weak));
-            }
-
-            section(ui, &p, "Your apps");
-            ui.label(RichText::new("Save the list of installed apps (with versions and channels) to set up another computer the same way.").color(p.weak));
-            ui.horizontal(|ui| {
-                if ui.button("Export app list…").clicked() {
-                    app.actions.push(Action::ExportList);
-                }
-                if ui.button("Import app list…").clicked() {
-                    app.actions.push(Action::ImportList);
-                }
-            });
-
-            section(ui, &p, "IT & Classroom");
-            it_section(app, ui, &p, &policy, &mut draft);
-
-            section(ui, &p, "Add-on repositories");
-            ui.label(RichText::new("Besides the CraftSpace registry, add-ons can come from repositories such as the ArtCraft Store. CraftSpace hasn't checked their add-ons for security; it asks before installing one.").size(12.0).color(p.weak));
-            for (store, _) in app.manager.addon_stores() {
-                let mut enabled = !draft.addon_stores.disabled.contains(&store.id);
-                ui.horizontal(|ui| {
-                    if ui.checkbox(&mut enabled, RichText::new(&store.name).strong()).changed() {
-                        if enabled {
-                            draft.addon_stores.disabled.retain(|s| *s != store.id);
-                        } else if !draft.addon_stores.disabled.contains(&store.id) {
-                            draft.addon_stores.disabled.push(store.id.clone());
-                        }
-                    }
-                    if let Some(repo) = &store.repo {
-                        ui.label(RichText::new(format!("github.com/{repo}")).size(12.0).color(p.weak));
-                    }
-                    if draft.addon_stores.custom.iter().any(|s| s.id == store.id) && ui.small_button("Remove").clicked() {
-                        draft.addon_stores.custom.retain(|s| s.id != store.id);
-                    }
-                });
-            }
-            if ui.button("Add a repository…").on_hover_text("Saves these settings, then opens Fonts & add-ons › Repositories").clicked() {
-                app.apps_view = crate::app::AppsView::Addons;
-                app.addon_repos_tab = true;
-                app.tab = crate::app::Tab::Apps;
-                save = true;
-                keep_open = false;
-            }
-
-            section(ui, &p, "Other sources (advanced)");
-            ui.add_enabled(
-                free("other_sources"),
-                egui::Checkbox::new(&mut draft.other_sources.enabled, "Let CraftSpace install and update apps from other GitHub repositories"),
-            );
-            ui.label(
-                RichText::new("Off, CraftSpace manages the ArtCraft apps only. On, you can add any repository's app, or update an ArtCraft app or CraftSpace itself from a fork, a mirror or a backup.")
-                    .size(12.0)
-                    .color(p.weak),
-            );
-            if app.settings.other_sources.enabled && draft.other_sources.enabled {
-                let other = app.settings.other_sources.clone();
-                for custom in &other.apps {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(&custom.name).strong());
-                        ui.label(RichText::new(format!("github.com/{}", custom.repo)).size(12.0).color(p.weak));
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            let installed = app.manager.installed_app(&custom.id).is_some();
+                    Os::Linux => {
+                        if let Some(format) = craftspace_core::platform::linux_package_format() {
+                            let (ext, tool) = if format == craftspace_core::platform::AssetKind::Rpm { (".rpm", "dnf") } else { (".deb", "apt") };
                             if ui
-                                .add_enabled(!installed, egui::Button::new("Remove").small())
-                                .on_disabled_hover_text("Uninstall it first")
-                                .clicked()
+                                .add_enabled(free("prefer_system_installer"), egui::Checkbox::new(&mut draft.prefer_system_installer, format!("Install apps as system packages ({ext} through {tool})")))
+                                .on_hover_text("The package manager owns the files; CraftSpace still finds and installs updates. Installing asks for your password.")
+                                .changed()
                             {
-                                app.actions.push(Action::Source(crate::worker::SourceOp::Remove { id: custom.id.clone() }));
+                                draft.install_mode_chosen = true;
                             }
-                        });
+                        }
+                        ui.add_enabled(free("prefer_appimage"), egui::Checkbox::new(&mut draft.prefer_appimage, "Install AppImages, so updates only download what changed"))
+                            .on_hover_text("Uses the .zsync files published with each release. How much is saved depends on how much changed between versions.");
+                    }
+                    _ => {}
+                }
+
+                    }
+                    Page::Files => {
+                let f = &app.settings.files;
+                let mut on: Vec<&str> = Vec::new();
+                if f.app_recents {
+                    on.push("apps' recent files");
+                }
+                if f.thumbnails {
+                    on.push("thumbnails");
+                }
+                if f.watch {
+                    on.push("live updates");
+                }
+                if f.find_portable {
+                    on.push("portable settings import");
+                }
+                let types = f.open_with_craftspace.len();
+                if types > 0 {
+                    on.push("opening file types");
+                }
+                ui.label(if on.is_empty() { "All optional Files features are off.".to_string() } else { format!("On: {}.", on.join(", ")) });
+                if types > 0 {
+                    ui.label(RichText::new(format!("CraftSpace opens {types} file type{}.", if types == 1 { "" } else { "s" })).size(12.0).color(p.weak));
+                }
+                if ui.button("Choose Files features…").clicked() {
+                    app.actions.push(Action::OpenFilesSetup);
+                }
+
+                    }
+                    Page::Appearance => {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut draft.theme, Theme::Dark, "Dark");
+                    ui.selectable_value(&mut draft.theme, Theme::Light, "Light");
+                    ui.selectable_value(&mut draft.theme, Theme::System, "Match system");
+                });
+                appearance(ui, &p, &mut draft.appearance);
+                if os == Os::Macos {
+                    use craftspace_core::settings::DockIcon;
+                    ui.add_space(4.0);
+                    ui.label("Dock icon");
+                    ui.radio_value(&mut draft.dock_icon, DockIcon::ColorWhenOpen, "Full colour while the window is open, macOS's icon style otherwise");
+                    ui.radio_value(&mut draft.dock_icon, DockIcon::Color, "Always full colour");
+                    ui.radio_value(&mut draft.dock_icon, DockIcon::System, "Always macOS's icon style (dark, clear or tinted, like the ArtCraft apps)");
+                    ui.label(RichText::new("The icon style is chosen in System Settings › Appearance.").size(12.0).color(p.weak));
+                }
+
+                    }
+                    Page::Addons => {
+                ui.label(RichText::new("Besides the CraftSpace registry, add-ons can come from repositories such as the ArtCraft Store. CraftSpace hasn't checked their add-ons for security; it asks before installing one.").size(12.0).color(p.weak));
+                for (store, _) in app.manager.addon_stores() {
+                    let mut enabled = !draft.addon_stores.disabled.contains(&store.id);
+                    ui.horizontal(|ui| {
+                        if ui.checkbox(&mut enabled, RichText::new(&store.name).strong()).changed() {
+                            if enabled {
+                                draft.addon_stores.disabled.retain(|s| *s != store.id);
+                            } else if !draft.addon_stores.disabled.contains(&store.id) {
+                                draft.addon_stores.disabled.push(store.id.clone());
+                            }
+                        }
+                        if let Some(repo) = &store.repo {
+                            ui.label(RichText::new(format!("github.com/{repo}")).size(12.0).color(p.weak));
+                        }
+                        if draft.addon_stores.custom.iter().any(|s| s.id == store.id) && ui.small_button("Remove").clicked() {
+                            draft.addon_stores.custom.retain(|s| s.id != store.id);
+                        }
                     });
                 }
-                for (id, repo) in &other.overrides {
+                if ui.button("Add a repository…").on_hover_text("Saves these settings, then opens Fonts & add-ons › Repositories").clicked() {
+                    app.apps_view = crate::app::AppsView::Addons;
+                    app.addon_repos_tab = true;
+                    app.tab = crate::app::Tab::Apps;
+                    save = true;
+                    keep_open = false;
+                }
+
+                    }
+                    Page::Sources => {
+                        section(ui, &p, "Other sources (advanced)");
+                ui.add_enabled(
+                    free("other_sources"),
+                    egui::Checkbox::new(&mut draft.other_sources.enabled, "Let CraftSpace install and update apps from other GitHub repositories"),
+                );
+                ui.label(
+                    RichText::new("Off, CraftSpace manages the ArtCraft apps only. On, you can add any repository's app, or update an ArtCraft app or CraftSpace itself from a fork, a mirror or a backup.")
+                        .size(12.0)
+                        .color(p.weak),
+                );
+                if app.settings.other_sources.enabled && draft.other_sources.enabled {
+                    let other = app.settings.other_sources.clone();
+                    for custom in &other.apps {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(&custom.name).strong());
+                            ui.label(RichText::new(format!("github.com/{}", custom.repo)).size(12.0).color(p.weak));
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                let installed = app.manager.installed_app(&custom.id).is_some();
+                                if ui
+                                    .add_enabled(!installed, egui::Button::new("Remove").small())
+                                    .on_disabled_hover_text("Uninstall it first")
+                                    .clicked()
+                                {
+                                    app.actions.push(Action::Source(crate::worker::SourceOp::Remove { id: custom.id.clone() }));
+                                }
+                            });
+                        });
+                    }
+                    for (id, repo) in &other.overrides {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("{} updates from github.com/{repo}", app.app_name(id)));
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if ui.add(egui::Button::new("Change…").small()).clicked() {
+                                    app.actions.push(Action::OpenSource(crate::views::sources::Target::App(id.clone())));
+                                }
+                            });
+                        });
+                    }
                     ui.horizontal(|ui| {
-                        ui.label(format!("{} updates from github.com/{repo}", app.app_name(id)));
+                        ui.label(format!("CraftSpace updates from github.com/{}", craftspace_core::selfupdate::update_repo(&app.manager)));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ui.add(egui::Button::new("Change…").small()).clicked() {
-                                app.actions.push(Action::OpenSource(crate::views::sources::Target::App(id.clone())));
+                                app.actions.push(Action::OpenSource(crate::views::sources::Target::App(
+                                    craftspace_core::selfupdate::NAME.into(),
+                                )));
                             }
                         });
                     });
+                    if ui.button("Add an app from GitHub…").clicked() {
+                        app.actions.push(Action::OpenSource(crate::views::sources::Target::NewApp));
+                    }
+                    ui.label(RichText::new("To update an ArtCraft app from a fork, use \"Update source…\" in its ••• menu.").size(12.0).color(p.weak));
+                } else if draft.other_sources.enabled {
+                    ui.label(RichText::new("Save to turn them on, then add apps here.").size(12.0).color(p.warn));
                 }
+
+                        section(ui, &p, "GitHub");
+                ui.label("Release information comes from GitHub. Without a token, GitHub allows 60 requests an hour; CraftSpace caches and falls back to direct downloads when the limit is hit. A token with no scopes raises the limit.");
+                let mut token = draft.github_token.clone().unwrap_or_default();
+                ui.add_enabled(
+                    free("github_token"),
+                    egui::TextEdit::singleline(&mut token).password(true).hint_text("Personal access token (optional)").desired_width(f32::INFINITY),
+                );
+                draft.github_token = (!token.trim().is_empty()).then(|| token.trim().to_string());
+                ui.add_enabled(free("remote_catalog"), egui::Checkbox::new(&mut draft.remote_catalog, "Get new apps from the online catalog"));
+
+                    }
+                    Page::Classroom => {
+                it_section(app, ui, &p, &policy, &mut draft);
+
+                    }
+                    Page::About => {
+                ui.label(format!("CraftSpace {} on {}", crate::app::version_string(), app.manager.platform().display()));
+                if let Some(src) = &policy.source {
+                    ui.label(RichText::new(format!("Policy: {}", src.display())).size(12.0).color(p.weak));
+                }
+                ui.label(RichText::new("An independent, open-source installer for the ArtCraft apps. Not affiliated with Adobe or Microsoft.").size(12.5).color(p.weak));
                 ui.horizontal(|ui| {
-                    ui.label(format!("CraftSpace updates from github.com/{}", craftspace_core::selfupdate::update_repo(&app.manager)));
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.add(egui::Button::new("Change…").small()).clicked() {
-                            app.actions.push(Action::OpenSource(crate::views::sources::Target::App(
-                                craftspace_core::selfupdate::NAME.into(),
-                            )));
-                        }
-                    });
+                    if ui.button("Open data folder").clicked() {
+                        app.actions.push(Action::OpenPath(app.manager.paths().root.clone()));
+                    }
+                    if ui.button("Clear downloads").clicked() {
+                        app.actions.push(Action::Cleanup);
+                    }
+                    if ui.button("Source code ↗").clicked() {
+                        app.actions.push(Action::OpenUrl("https://github.com/emircesur/craftspace".into()));
+                    }
                 });
-                if ui.button("Add an app from GitHub…").clicked() {
-                    app.actions.push(Action::OpenSource(crate::views::sources::Target::NewApp));
+                    }
                 }
-                ui.label(RichText::new("To update an ArtCraft app from a fork, use \"Update source…\" in its ••• menu.").size(12.0).color(p.weak));
-            } else if draft.other_sources.enabled {
-                ui.label(RichText::new("Save to turn them on, then add apps here.").size(12.0).color(p.warn));
-            }
-
-            section(ui, &p, "GitHub");
-            ui.label("Release information comes from GitHub. Without a token, GitHub allows 60 requests an hour; CraftSpace caches and falls back to direct downloads when the limit is hit. A token with no scopes raises the limit.");
-            let mut token = draft.github_token.clone().unwrap_or_default();
-            ui.add_enabled(
-                free("github_token"),
-                egui::TextEdit::singleline(&mut token).password(true).hint_text("Personal access token (optional)").desired_width(f32::INFINITY),
-            );
-            draft.github_token = (!token.trim().is_empty()).then(|| token.trim().to_string());
-            ui.add_enabled(free("remote_catalog"), egui::Checkbox::new(&mut draft.remote_catalog, "Get new apps from the online catalog"));
-
-            section(ui, &p, "About");
-            ui.label(format!("CraftSpace {} on {}", crate::app::version_string(), app.manager.platform().display()));
-            if let Some(src) = &policy.source {
-                ui.label(RichText::new(format!("Policy: {}", src.display())).size(12.0).color(p.weak));
-            }
-            ui.label(RichText::new("An independent, open-source installer for the ArtCraft apps. Not affiliated with Adobe or Microsoft.").size(12.5).color(p.weak));
-            ui.horizontal(|ui| {
-                if ui.button("Open data folder").clicked() {
-                    app.actions.push(Action::OpenPath(app.manager.paths().root.clone()));
-                }
-                if ui.button("Clear downloads").clicked() {
-                    app.actions.push(Action::Cleanup);
-                }
-                if ui.button("Source code ↗").clicked() {
-                    app.actions.push(Action::OpenUrl("https://github.com/emircesur/craftspace".into()));
-                }
+            });
             });
         });
         ui.add_space(12.0);
@@ -496,6 +534,96 @@ fn appearance(ui: &mut Ui, p: &theme::Palette, look: &mut craftspace_core::setti
         }
         ui.label(RichText::new("Soft tiles, filled buttons and round corners.").size(12.0).color(p.weak));
     });
+}
+
+/// The pages in the Settings menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Page {
+    #[default]
+    General,
+    Updates,
+    Downloads,
+    Installation,
+    Files,
+    Appearance,
+    Addons,
+    Sources,
+    Classroom,
+    About,
+}
+
+impl Page {
+    pub const ALL: [Page; 10] = [
+        Page::General,
+        Page::Updates,
+        Page::Downloads,
+        Page::Installation,
+        Page::Files,
+        Page::Appearance,
+        Page::Addons,
+        Page::Sources,
+        Page::Classroom,
+        Page::About,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Page::General => "General",
+            Page::Updates => "Updates",
+            Page::Downloads => "Downloads",
+            Page::Installation => "Installation",
+            Page::Files => "Files",
+            Page::Appearance => "Appearance",
+            Page::Addons => "Add-ons",
+            Page::Sources => "Sources & GitHub",
+            Page::Classroom => "IT & Classroom",
+            Page::About => "About",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            Page::General => "What CraftSpace does when you close it, and your list of apps.",
+            Page::Updates => "When CraftSpace looks for updates and installs them.",
+            Page::Downloads => "How many apps download at once, and how fast.",
+            Page::Installation => "Where apps go, and how they're installed.",
+            Page::Files => "The Files tab's optional features.",
+            Page::Appearance => "Theme, accent colour, icons, buttons and corners.",
+            Page::Addons => "Where add-ons come from.",
+            Page::Sources => "Apps and updates from other GitHub repositories, and your GitHub token.",
+            Page::Classroom => "Policies, a shared package cache and status reports for labs.",
+            Page::About => "Version, data folder and source code.",
+        }
+    }
+
+    /// For `CRAFTSPACE_VIEW=settings:<page>`.
+    pub fn from_name(name: &str) -> Option<Page> {
+        Page::ALL.into_iter().find(|p| {
+            let label = p.label().to_ascii_lowercase();
+            label == name || label.split([' ', '-']).next() == Some(name) || format!("{p:?}").eq_ignore_ascii_case(name)
+        })
+    }
+}
+
+/// A menu entry, drawn like the main window's sidebar.
+fn nav(ui: &mut Ui, p: &theme::Palette, label: &str, selected: bool) -> bool {
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 32.0), egui::Sense::click());
+    if selected || response.hovered() {
+        ui.painter().rect_filled(rect, p.radius(6.0), if selected { p.card_hover } else { p.card });
+    }
+    if selected {
+        let bar =
+            egui::Rect::from_min_size(rect.left_top() + Vec2::new(0.0, 8.0), Vec2::new(3.0, rect.height() - 16.0));
+        ui.painter().rect_filled(bar, 2.0, p.accent);
+    }
+    ui.painter().text(
+        rect.left_center() + Vec2::new(12.0, 0.0),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(14.0),
+        if selected { p.text } else { p.weak },
+    );
+    response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
 }
 
 fn section(ui: &mut Ui, p: &crate::theme::Palette, title: &str) {
