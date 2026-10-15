@@ -4,7 +4,7 @@
 
 An independent installer and update manager for the open-source
 [ArtCraft](https://github.com/storytold) creative apps It's written in Rust and runs on Windows, macOS and Linux.
-Since they made an offical launcher, I will not maintain this project. It was a fun learning project to make a launcher and file browser! Check https://github.com/emircesur/OktoSpace for general github repo updater/installer for linux, windows and mac.
+Since they made an offical launcher, I will not maintain this project. It was a fun learning project to make a launcher and file browser! Check https://github.com/emircesur/OktoSpace for general github repo updater/installer for linux, windows and mac. Or you can use this app and go to settings to add any other repo you want to update as well.
 
 ![App library](docs/screenshots/apps.png)
 
